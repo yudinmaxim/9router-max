@@ -118,7 +118,11 @@ export async function POST(request) {
     // key to paste. Without this, following such a provider's own setup notice returns 400.
     const apiKeySubstitute = AI_PROVIDERS[provider]?.apiKeyOptionalWith;
     const hasApiKeySubstitute = !!(apiKeySubstitute && body.providerSpecificData?.[apiKeySubstitute]);
-    if (!apiKey && provider !== "ollama-local" && !hasApiKeySubstitute) {
+    // noAuth providers keep their credential in the agent CLI's own store (cursor-agent
+    // login, devin auth login) and have nothing to paste here — same exemption the
+    // /validate route already applies, otherwise they can't be connected at all.
+    const isNoAuthProvider = AI_PROVIDERS[provider]?.noAuth === true;
+    if (!apiKey && provider !== "ollama-local" && !isNoAuthProvider && !hasApiKeySubstitute) {
       return NextResponse.json({ error: `${isWebCookieProvider ? "Cookie value" : "API Key"} is required` }, { status: 400 });
     }
     const connectionName = name || displayName || AI_PROVIDERS[provider]?.name;
