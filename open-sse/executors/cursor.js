@@ -12,6 +12,7 @@ import {
   decodeMcpArgs,
 } from "../utils/cursorProtobuf.js";
 import { buildCursorHeaders } from "../utils/cursorChecksum.js";
+import { makeCursorHttp2Request } from "../utils/cursorHttp2.js";
 import { estimateUsage } from "../utils/usageTracking.js";
 import { SSE_DONE, SSE_HEADERS } from "../utils/sseConstants.js";
 import { chatChunkSse, sseChunk } from "../utils/sse.js";
@@ -403,62 +404,7 @@ export class CursorExecutor extends BaseExecutor {
   }
 
   makeHttp2Request(url, headers, body, signal) {
-    if (!http2) {
-      throw new Error("http2 module not available");
-    }
-
-    const HTTP2_TIMEOUT_MS = 60000; // 60s max — prevent hung sessions
-
-    return new Promise((resolve, reject) => {
-      const urlObj = new URL(url);
-      const client = http2.connect(`https://${urlObj.host}`);
-      const chunks = [];
-      let responseHeaders = {};
-      let settled = false;
-
-      // Ensure client is always closed on settle
-      const finish = (fn) => (...args) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(hangTimeout);
-        client.close();
-        fn(...args);
-      };
-
-      // Hard timeout: close session if server never responds
-      const hangTimeout = setTimeout(finish(() => {
-        reject(new Error("HTTP/2 request timed out"));
-      }), HTTP2_TIMEOUT_MS);
-
-      client.on("error", finish(reject));
-
-      const req = client.request({
-        ":method": "POST",
-        ":path": urlObj.pathname,
-        ":authority": urlObj.host,
-        ":scheme": "https",
-        ...headers
-      });
-
-      req.on("response", (hdrs) => { responseHeaders = hdrs; });
-      req.on("data", (chunk) => { chunks.push(chunk); });
-      req.on("end", finish(() => {
-        resolve({
-          status: responseHeaders[":status"],
-          headers: responseHeaders,
-          body: Buffer.concat(chunks)
-        });
-      }));
-      req.on("error", finish(reject));
-
-      if (signal) {
-        const onAbort = finish(() => reject(new Error("Request aborted")));
-        signal.addEventListener("abort", onAbort, { once: true });
-      }
-
-      req.write(body);
-      req.end();
-    });
+    return makeCursorHttp2Request(url, headers, body, signal);
   }
 
   /**
