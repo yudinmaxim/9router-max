@@ -1,3 +1,17 @@
+# v0.5.99-max-fork (2026-10-09)
+
+Fork release. Changes on top of upstream v0.5.99:
+
+## Features
+- **Cursor ACP**: new `cursor-acp` provider (alias `ca`) that drives the local `cursor-agent` CLI over the Agent Client Protocol (JSON-RPC 2.0 on stdio) — text streaming, `reasoning_content` passthrough, `session/set_model` model selection, and cursor's own shell/fs tools executed inside one request
+- **Cursor**: plan quota for the current billing cycle via `DashboardService/GetCurrentPeriodUsage` (Connect-RPC over HTTP/2, JSON codec) — utilization bars (Total / API / Auto) plus included, bonus and spent credits; shared by the `cursor` and `cursor-acp` connections
+- **Providers**: allow connecting `noAuth` providers without an API key (matches the exemption `/api/providers/validate` already applied) — such providers keep their credential in the agent CLI's own store
+
+## Notes
+- `cursor-acp` runs cursor as a full autonomous agent: client-supplied `tools` are not callable through it, because this cursor build exposes no client-tool channel over ACP and runs its own tools instead
+- Shared ACP helpers (prompt flattening, workspace cwd resolution, JSON-RPC framing) moved to `open-sse/executors/lib/acpCommon.js`, reused by both ACP executors
+- `CursorExecutor`'s HTTP/2 client moved to `open-sse/utils/cursorHttp2.js` so the chat and quota paths share one implementation
+
 # v0.5.99 (2026-10-08)
 
 ## Features
