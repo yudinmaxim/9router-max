@@ -24,6 +24,12 @@ export default {
       "User-Agent": "connect-es/1.6.1",
     },
     clientVersion: "3.12.17",
+    // Plan quota for the current billing cycle. Connect-RPC over HTTP/2 with the
+    // JSON codec — `application/connect+proto` (the streaming encoding) is
+    // rejected by this unary method. Read by services/usage/cursor.js.
+    usage: {
+      url: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+    },
   },
   models: [
     { id: "default", name: "Auto (Server Picks)" },
@@ -41,6 +47,11 @@ export default {
     { id: "gpt-5.2", name: "GPT 5.2" },
     { id: "gpt-5.3-codex", name: "GPT 5.3 Codex" },
   ],
+  // Billing-cycle quota lives on the same account as the local cursor-agent
+  // CLI, so both the `cursor` and `cursor-acp` connections can display it.
+  features: {
+    usage: true,
+  },
   oauth: {
     apiEndpoint: "https://api2.cursor.sh",
     chatEndpoint: "/aiserver.v1.ChatService/StreamUnifiedChatWithTools",
