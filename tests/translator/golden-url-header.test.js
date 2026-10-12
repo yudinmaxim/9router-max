@@ -23,15 +23,26 @@ const SPECIALIZED = new Set([
   "xiaomi-tokenplan", "mimo-free",
 ]);
 
-// Sanitize header: khử token + field thời gian động (kimi X-Msh-Device-Id) để snapshot ổn định.
+// Sanitize header: khử token + field thời gian động để snapshot ổn định.
+// X-Mavis-Session-Id là UUID mới ở mỗi lần gọi buildHeaders() (open-sse/executors/default.js:51,
+// randomUUID() không memoize, guard "nếu chưa có" là code chết vì không ai set trước).
+// Anchor theo tên key chứ không regex UUID: regex sẽ che luôn một id không ổn định thật sự.
+const VOLATILE_BY_KEY = {
+  "X-Mavis-Session-Id": "<SESSION_ID>",
+};
+
 function sanitize(headers) {
   const out = {};
   for (const [k, v] of Object.entries(headers)) {
-    out[k] = typeof v === "string"
-      ? v.replace(/Bearer .+/, "Bearer <TOK>")
-          .replace(/sk-test-APIKEY|tok-test-ACCESS/g, "<CRED>")
-          .replace(/kimi-\d{10,}/g, "kimi-<TS>")
-      : v;
+    if (typeof v === "string" && Object.hasOwn(VOLATILE_BY_KEY, k)) {
+      out[k] = VOLATILE_BY_KEY[k];
+    } else {
+      out[k] = typeof v === "string"
+        ? v.replace(/Bearer .+/, "Bearer <TOK>")
+            .replace(/sk-test-APIKEY|tok-test-ACCESS/g, "<CRED>")
+            .replace(/kimi-\d{10,}/g, "kimi-<TS>")
+        : v;
+    }
   }
   return out;
 }
