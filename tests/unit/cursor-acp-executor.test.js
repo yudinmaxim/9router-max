@@ -95,8 +95,11 @@ function makeFakeChild({ catalog = CATALOG, promptUpdates = null, stopReason = "
         id: msg.id,
         result: { sessionId: "fake-session", models: catalog },
       });
-    } else if (msg.method === "session/set_model") {
-      const known = (catalog.availableModels || []).some((m) => m.modelId === msg.params.modelId);
+    } else if (msg.method === "session/set_config_option") {
+      // The shared ACP base pins the model through configId "model" — the one
+      // call cursor, opencode and omp all accept. The real cursor answers with
+      // the updated configOptions; a null result is equally acceptable here.
+      const known = (catalog.availableModels || []).some((m) => m.modelId === msg.params?.value);
       if (!known) {
         send({
           jsonrpc: "2.0",
@@ -105,7 +108,7 @@ function makeFakeChild({ catalog = CATALOG, promptUpdates = null, stopReason = "
         });
         return;
       }
-      send({ jsonrpc: "2.0", id: msg.id, result: null });
+      send({ jsonrpc: "2.0", id: msg.id, result: { configOptions: [] } });
     } else if (msg.method === "session/prompt") {
       if (!Array.isArray(msg.params?.prompt)) {
         send({
@@ -213,18 +216,19 @@ describe("CursorAcpExecutor handshake", () => {
 });
 
 describe("CursorAcpExecutor model selection", () => {
-  it("calls session/set_model with the exact catalog id when the client asks for another model", async () => {
+  it("pins the model with session/set_config_option configId=model when the client asks for another model", async () => {
     const { child } = await runExecute();
-    const setModel = child.writes.map((w) => JSON.parse(w.trim())).find((m) => m.method === "session/set_model");
+    const setModel = child.writes.map((w) => JSON.parse(w.trim())).find((m) => m.method === "session/set_config_option");
     expect(setModel).toBeTruthy();
-    expect(setModel.params.modelId).toBe("gpt-5.3-codex[reasoning=medium,fast=false]");
+    expect(setModel.params.configId).toBe("model");
+    expect(setModel.params.value).toBe("gpt-5.3-codex[reasoning=medium,fast=false]");
     expect(setModel.params.sessionId).toBe("fake-session");
   });
 
-  it("skips session/set_model when the requested model is already current", async () => {
+  it("skips session/set_config_option when the requested model is already current", async () => {
     const { child } = await runExecute({ execute: { model: "default" } });
     const methods = child.writes.map((w) => JSON.parse(w.trim())).map((m) => m.method);
-    expect(methods).not.toContain("session/set_model");
+    expect(methods).not.toContain("session/set_config_option");
     expect(methods.indexOf("session/prompt")).toBeGreaterThan(methods.indexOf("session/new"));
   });
 
@@ -233,17 +237,17 @@ describe("CursorAcpExecutor model selection", () => {
     // switched to `default[]` rather than silently running on the current model.
     const catalog = { currentModelId: "composer-2.5[fast=true]", availableModels: CATALOG.availableModels };
     const { child, acc } = await runExecute({ execute: { model: "totally-unknown" }, catalog });
-    const setModel = child.writes.map((w) => JSON.parse(w.trim())).find((m) => m.method === "session/set_model");
-    expect(setModel.params.modelId).toBe("default[]");
+    const setModel = child.writes.map((w) => JSON.parse(w.trim())).find((m) => m.method === "session/set_config_option");
+    expect(setModel.params.value).toBe("default[]");
     expect(acc).not.toContain('"error"');
     const frames = sseFrames(acc);
     expect(frames[frames.length - 1].choices[0].finish_reason).toBe("stop");
   });
 
-  it("skips set_model when an unknown model degrades to the already-current Auto", async () => {
+  it("skips the model pin when an unknown model degrades to the already-current Auto", async () => {
     const { child, acc } = await runExecute({ execute: { model: "totally-unknown" } });
     const methods = child.writes.map((w) => JSON.parse(w.trim())).map((m) => m.method);
-    expect(methods).not.toContain("session/set_model");
+    expect(methods).not.toContain("session/set_config_option");
     expect(acc).not.toContain('"error"');
   });
 });
@@ -318,7 +322,7 @@ describe("CursorAcpExecutor failures", () => {
     const { acc } = await runExecute({ promptError: { code: -32603, message: "Internal error" } });
     const frames = sseFrames(acc);
     expect(frames).toHaveLength(1);
-    expect(frames[0].error.message).toMatch(/Cursor ACP error -32603: Internal error/);
+    expect(frames[0].error.message).toMatch(/Cursor Agent ACP error -32603: Internal error/);
     expect(frames[0].error.type).toBe("cursor_acp_error");
     expect(acc.trim().endsWith("data: [DONE]")).toBe(true);
   });

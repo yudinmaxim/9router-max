@@ -10,6 +10,9 @@ import { KimchiExecutor } from "./kimchi.js";
 import { CodexExecutor } from "./codex.js";
 import { CursorExecutor } from "./cursor.js";
 import { CursorAcpExecutor } from "./cursor-acp.js";
+import { OpenCodeAcpExecutor } from "./opencode-acp.js";
+import { OmpAcpExecutor } from "./omp-acp.js";
+import { CodexAcpExecutor } from "./codex-acp.js";
 import { VertexExecutor } from "./vertex.js";
 import { OpenCodeExecutor } from "./opencode.js";
 import { OpenCodeGoExecutor } from "./opencode-go.js";
@@ -46,6 +49,9 @@ const executors = {
   cu: new CursorExecutor(), // Alias for cursor
   "cursor-acp": new CursorAcpExecutor(),
   ca: new CursorAcpExecutor(), // Alias for cursor-acp
+  "opencode-acp": new OpenCodeAcpExecutor(),
+  "omp-acp": new OmpAcpExecutor(),
+  "codex-acp": new CodexAcpExecutor(),
   vertex: new VertexExecutor("vertex"),
   "vertex-partner": new VertexExecutor("vertex-partner"),
   opencode: new OpenCodeExecutor(),
@@ -104,6 +110,10 @@ export { KimchiExecutor } from "./kimchi.js";
 export { CodexExecutor } from "./codex.js";
 export { CursorExecutor } from "./cursor.js";
 export { CursorAcpExecutor } from "./cursor-acp.js";
+export { OpenCodeAcpExecutor } from "./opencode-acp.js";
+export { OmpAcpExecutor } from "./omp-acp.js";
+export { CodexAcpExecutor } from "./codex-acp.js";
+export { AcpAgentExecutor } from "./lib/acpBase.js";
 export { VertexExecutor } from "./vertex.js";
 export { DefaultExecutor } from "./default.js";
 export { OpenCodeExecutor } from "./opencode.js";
