@@ -30,12 +30,22 @@
  *     (`opencode/big-pickle`), rejecting a bare name with `-32602`.
  *
  * Why one request = one full turn: the agent runs its own shell/fs tools and
- * reports them over ACP. There is no client-tool channel in these builds —
- * `agentCapabilities.mcpCapabilities` advertises http/sse only, and MCP tools
- * dispatch to a stub that never calls back. So `tool_call` notifications are
- * progress, not OpenAI `tool_calls`; re-emitting them would double-execute.
- * `body.tools` from the client are therefore ignored and the agent runs the
- * task end to end with its own toolbelt.
+ * reports them over ACP. Two facts shape the protocol work here, both verified
+ * against `opencode acp` rather than assumed:
+ *
+ *   - `session/request_permission` is a request, not a notification. The agent
+ *     blocks the turn until the client answers; unanswered means the turn never
+ *     returns. It is not gated on clientCapabilities — it arrives even when the
+ *     client advertises nothing. Answered above, allow-option selected, logged.
+ *   - `tool_call` / `tool_call_update` notifications are the agent narrating
+ *     its *own* sandbox tools. Re-emitting them as OpenAI `tool_calls` would
+ *     double-execute, so they are logged, not forwarded.
+ *
+ * Client-side `body.tools` therefore reach the agent the other way round: the
+ * agent advertises `mcpCapabilities: {http: true, sse: true}`, so registering
+ * a bridge MCP server in `session/new` is the supported path for handing the
+ * agent tools it cannot run itself. Not wired up yet — the agent currently runs
+ * the task end to end with its own toolbelt and `body.tools` are ignored.
  */
 
 import { spawn } from "node:child_process";
@@ -392,6 +402,18 @@ export class AcpAgentExecutor extends BaseExecutor {
           return id;
         };
 
+        // Answer an agent-initiated request under the id the agent chose.
+        // Must not touch idCounter — that counter tracks requests we made, and
+        // reusing its values would collide with their in-flight responses.
+        const sendRpcRaw = (obj) => {
+          if (stdinClosed || child.stdin.destroyed) return;
+          try {
+            child.stdin.write(JSON.stringify(obj) + "\n");
+          } catch {
+            /* ignore write errors after close */
+          }
+        };
+
         const chunk = (delta, finishReason = null, extra = {}) => {
           emit(
             `data: ${JSON.stringify({
@@ -571,19 +593,55 @@ export class AcpAgentExecutor extends BaseExecutor {
               return;
             }
 
-            // ── client capability requests we deliberately don't answer ───
-            // the agent may ask the client to sample/stop/elicitation, or to
-            // read or write a file. These builds have no such client channel;
-            // replying would only stall the turn, so the request is left
-            // unanswered.
-            if (msg.method && msg.id !== undefined && msg.id !== null) {
-              if (
-                msg.method === "session/request_permission" ||
-                msg.method === "fs/read_text_file" ||
-                msg.method === "fs/write_text_file"
-              ) {
-                log?.debug?.(tag, `unanswered client request: ${msg.method}`);
+            // ── permission requests → approve, but log every grant ────────
+            // The agent blocks the turn until this is answered: left hanging,
+            // a prompt that touches a tool never returns (verified against
+            // `opencode acp` — it emits tool_call pending/in_progress, then
+            // waits on session/request_permission indefinitely).
+            // 9router is a headless proxy with nobody to prompt, so we select
+            // the allow-ish option. The grant is recorded here rather than
+            // hidden behind the agent's bypass mode, which would give it
+            // blanket authority with no trace.
+            if (msg.method === "session/request_permission" && msg.id !== undefined && msg.id !== null) {
+              const options = msg.params?.options || [];
+              const allow =
+                options.find((o) => /allow/i.test(String(o.kind || ""))) || options[0];
+              if (allow) {
+                log?.debug?.(
+                  tag,
+                  `approving ${String(allow.kind || "unspecified")} permission for ` +
+                    `tool ${String(msg.params?.toolCallId || "?")} ` +
+                    "(no operator to prompt — 9router runs this provider headless)"
+                );
+                sendRpcRaw({
+                  jsonrpc: "2.0",
+                  id: msg.id,
+                  result: { outcome: { outcome: "selected", optionId: allow.optionId } },
+                });
+              } else {
+                // Nothing to select. We must still answer — an unanswered
+                // request blocks the agent's turn indefinitely, which reaches
+                // the caller as a hang with no error. Cancelling is the honest
+                // outcome: it tells the agent to stop rather than proceed
+                // unapproved, and it lets the turn terminate.
+                log?.debug?.(tag, "session/request_permission had no options — cancelling");
+                sendRpcRaw({
+                  jsonrpc: "2.0",
+                  id: msg.id,
+                  result: { outcome: { outcome: "cancelled" } },
+                });
               }
+              continue;
+            }
+
+            // ── client channel we genuinely do not implement ───────────────
+            // fs/* and elicitation would require a real client-side capability
+            // channel; these builds do not expose one. Leaving them unanswered
+            // is safe — the agent self-executes its own tools and only reaches
+            // for fs/* when the client advertised those capabilities, which we
+            // do not (see the initialize handshake above).
+            if (msg.method && msg.id !== undefined && msg.id !== null) {
+              log?.debug?.(tag, `unanswered client request: ${msg.method}`);
               continue;
             }
 
@@ -600,8 +658,11 @@ export class AcpAgentExecutor extends BaseExecutor {
                 const content = update.content ?? params.content;
                 emitReasoning(typeof content === "string" ? content : (content?.text ?? ""));
               } else if (type === "tool_call" || type === "tool_call_update") {
-                // The agent is running its own tools — progress only. Surfacing
-                // these as OpenAI tool_calls would re-run them client-side.
+                // The agent runs its own tools against its own sandbox — these
+                // are progress reports, not calls the client should service.
+                // Surfacing them as OpenAI tool_calls would re-run them
+                // client-side. Client-side tools reach the agent the other way
+                // round, via mcpServers in session/new.
                 if (update.status === "pending" || type === "tool_call") {
                   log?.debug?.(tag, `tool: ${update.title || update.kind || "?"}`);
                 }
