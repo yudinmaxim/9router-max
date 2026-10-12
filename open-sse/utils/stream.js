@@ -1,6 +1,6 @@
 import { translateResponse, initState } from "../translator/index.js";
 import { FORMATS } from "../translator/formats.js";
-import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
+import { trackPendingRequest, appendRequestLog, saveRequestUsage } from "@/lib/usageDb.js";
 import { extractUsage, mergeUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE, extractStreamError, buildStreamErrorFrame } from "./streamHelpers.js";
 import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatIncompleteOpenAIResponsesStreamFailure } from "./responsesStreamHelpers.js";
@@ -122,7 +122,13 @@ export function createSSEStream(options = {}) {
     }
 
     if (streamErrorStatus !== null) {
-      appendRequestLog({ model, provider, connectionId, tokens: finalUsage, status: `FAILED ${streamErrorStatus}` }).catch(() => { });
+      saveRequestUsage({
+        provider: provider || "unknown",
+        model: model || "unknown",
+        connectionId: connectionId || undefined,
+        status: `FAILED ${streamErrorStatus}`,
+        tokens: { prompt_tokens: 0, completion_tokens: 0 },
+      }).catch(() => { });
     } else if (hasValidUsage(finalUsage)) {
       logUsage(isPassthrough ? provider : (state?.provider || targetFormat), finalUsage, model, connectionId, apiKey);
     } else {

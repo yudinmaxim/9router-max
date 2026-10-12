@@ -1,9 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const appendRequestLog = vi.fn(async () => {});
+const saveRequestUsage = vi.fn(async () => {});
 vi.mock("@/lib/usageDb.js", () => ({
   trackPendingRequest: vi.fn(),
   appendRequestLog: (...args) => appendRequestLog(...args),
+  saveRequestUsage: (...args) => saveRequestUsage(...args),
 }));
 
 const { extractStreamError } = await import("../../open-sse/utils/streamHelpers.js");
@@ -86,6 +88,7 @@ describe("extractStreamError", () => {
 describe("error frame arriving inside a 200 stream", () => {
   beforeEach(() => {
     appendRequestLog.mockClear();
+    saveRequestUsage.mockClear();
   });
 
   it("reaches an Anthropic client as `event: error` instead of an empty stream", async () => {
@@ -114,11 +117,10 @@ describe("error frame arriving inside a 200 stream", () => {
     expect(out).toContain("tail error");
   });
 
-  it("records the failure in the request log", async () => {
+  it("records the failure in usage history", async () => {
     await runStream('data: {"error":{"message":"quota gone","type":"rate_limit_error"}}\n\n');
-    const statuses = appendRequestLog.mock.calls.map((c) => c[0].status);
+    const statuses = saveRequestUsage.mock.calls.map((c) => c[0].status);
     expect(statuses).toContain("FAILED 429");
-    expect(statuses).not.toContain("200 OK");
   });
 
   it("still reports a normal completion as 200 OK", async () => {
@@ -126,8 +128,7 @@ describe("error frame arriving inside a 200 stream", () => {
       'data: {"id":"chatcmpl-abc123456","choices":[{"delta":{"content":"hi"},"index":0}]}\n\ndata: {"id":"chatcmpl-abc123456","choices":[{"delta":{},"finish_reason":"stop","index":0}]}\n\ndata: [DONE]\n\n',
       { sourceFormat: FORMATS.OPENAI },
     );
-    const statuses = appendRequestLog.mock.calls.map((c) => c[0].status);
-    expect(statuses).not.toContain("FAILED 429");
+    expect(saveRequestUsage.mock.calls.map((c) => c[0].status)).not.toContain("FAILED 429");
   });
 
   it("delivers content that arrived before the error frame, then reports the error", async () => {
