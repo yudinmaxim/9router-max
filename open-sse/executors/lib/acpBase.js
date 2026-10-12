@@ -110,7 +110,18 @@ export function resolveAgentBin({ envVar, exe, versionsDir, extraDirs = [] }) {
     candidates.push(path.join(home, ".local", "bin", bin));
   }
 
-  candidates.push(...extraDirs);
+  // extraDirs are directories, not binary paths. Accept either: a directory
+  // gets the exe appended, an explicit file is taken as-is.
+  candidates.push(
+    ...extraDirs.map((entry) => {
+      try {
+        if (fs.statSync(entry).isFile()) return entry;
+      } catch {
+        /* not a file — treat it as a directory */
+      }
+      return path.join(entry, bin);
+    })
+  );
   candidates.push(
     "/opt/homebrew/bin/" + bin,
     "/usr/local/bin/" + bin,
@@ -119,7 +130,10 @@ export function resolveAgentBin({ envVar, exe, versionsDir, extraDirs = [] }) {
 
   for (const candidate of candidates) {
     try {
-      if (fs.existsSync(candidate)) return candidate;
+      // Must be a regular file. existsSync also accepts directories, and
+      // spawning one surfaces as a bare `EACCES` rather than "not installed",
+      // which reads like a permissions problem instead of a bad lookup.
+      if (fs.statSync(candidate).isFile()) return candidate;
     } catch {
       /* ignore */
     }
@@ -169,7 +183,12 @@ export function collectModelCatalog(sessionResult) {
   const out = [];
   const seen = new Set();
   const push = (value) => {
-    const id = typeof value === "string" ? value : (value?.modelId ?? value?.id);
+    // Catalog option shapes differ per agent: cursor sends `{modelId}`,
+    // opencode and omp send `{value, name}`. Accept all three — silently
+    // dropping `{value}` entries left the catalog empty, which made the
+    // resolver pass the bare requested name straight to the agent and earn
+    // `-32602 model not found`.
+    const id = typeof value === "string" ? value : (value?.modelId ?? value?.id ?? value?.value);
     if (!id || seen.has(id)) return;
     seen.add(id);
     out.push(id);
@@ -236,23 +255,33 @@ export function resolveAgentModelId(requested, catalog, current = "") {
   const byExactName = (target) => usable.find((id) => acpModelName(id).toLowerCase() === target);
   const exactName = byExactName(wantName);
   if (exactName) return exactName;
-  const exactBase = byExactName(wantBase);
+
+  // Agent ids may be provider-qualified (`opencode/space-bunny-free`) while the
+  // client asked for the bare name. Match on the part after the slash — without
+  // this no opencode id ever matches, and the fallback below hands back the
+  // CLI's current model, which is often a self-routed id.
+  const byBase = (target) => usable.find((id) => acpModelBase(id).toLowerCase() === target);
+  const exactBase = byBase(wantBase);
   if (exactBase) return exactBase;
 
-  const canonWant = canonModelName(want);
-  const canonExact = usable.find((id) => canonModelName(id) === canonWant);
+  const canonWant = canonModelName(acpModelBase(want));
+  const canonExact = usable.find((id) => canonModelName(acpModelBase(id)) === canonWant);
   if (canonExact) return canonExact;
 
-  const prefixed = usable.filter((id) => acpModelName(id).toLowerCase().startsWith(wantName)).sort(byLength);
+  const prefixed = usable.filter((id) => acpModelBase(id).toLowerCase().startsWith(wantName)).sort(byLength);
   if (prefixed.length) return prefixed[0];
 
-  const canonPrefixed = usable.filter((id) => canonModelName(id).startsWith(canonWant)).sort(byLength);
+  const canonPrefixed = usable.filter((id) => canonModelName(acpModelBase(id)).startsWith(canonWant)).sort(byLength);
   if (canonPrefixed.length) return canonPrefixed[0];
 
   // Nothing matched: let the agent choose. `default[]` is cursor's explicit
   // Auto entry and is preferred over whatever the CLI happens to be pinned to;
-  // agents without it fall back to their current model.
-  return AUTO_MODEL && usable.includes(AUTO_MODEL) ? AUTO_MODEL : (current || usable[0]);
+  // agents without it fall back to their current model. A current model that
+  // points back at this router is skipped — using it would make the agent call
+  // the gateway that spawned it.
+  if (AUTO_MODEL && usable.includes(AUTO_MODEL)) return AUTO_MODEL;
+  if (current && !isSelfRouted(current)) return current;
+  return usable[0];
 }
 
 // ─── ACP stop reason → OpenAI finish_reason ──────────────────────────────────
