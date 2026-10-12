@@ -23,8 +23,16 @@ function relTestPath(abs) {
   return i === -1 ? abs : abs.slice(i);
 }
 
+// Tests that talk to a live upstream. Their outcome depends on the network
+// and on third-party quotas, not on this repo's code, so tracking them here
+// would report noise as regressions. They are opt-in via RUN_REAL=1.
+function isEnvDependent(file) {
+  return /\.(real|live)\.test\.js$/.test(file);
+}
+
 const nowFails = r.testResults.flatMap(f => {
   const file = relTestPath(f.name);
+  if (isEnvDependent(file)) return [];
   const failed = f.assertionResults
     .filter(a => a.status === "failed")
     .map(a => file + " :: " + a.fullName);
