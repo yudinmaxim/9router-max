@@ -1,6 +1,8 @@
 import { FORMATS } from "../translator/formats.js";
 import { buildErrorBody } from "./error.js";
 import { SSE_DONE } from "./sseConstants.js";
+import { HTTP_STATUS } from "../config/runtimeConfig.js";
+import { DEFAULT_ERROR_MESSAGES } from "../config/errorConfig.js";
 
 const sharedEncoder = new TextEncoder();
 
@@ -125,23 +127,77 @@ export function formatSSE(data, sourceFormat) {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
+// A provider that hits a quota or rate limit after the 200 is already sent cannot
+// change the status code any more, so it reports the failure as a normal SSE payload
+// (`data: {"error": ...}`, or `data: {"type":"error","error":{...}}` for Anthropic-style
+// upstreams) and then closes cleanly. Nothing marks that as an error: there is no
+// transport failure for pipeWithDisconnect to report, and every response translator
+// drops the frame because it carries no `choices`/`content`. The client is left with
+// a 200 stream that ends without a terminal event, so Anthropic clients wait forever
+// and OpenAI clients resolve to an empty completion.
+const STREAM_ERROR_TYPE_STATUS = [
+  [/(rate_limit|quota|usage_limit|resource_exhausted|insufficient_quota|billing)/i, HTTP_STATUS.RATE_LIMITED],
+  [/(overload|overloaded|capacity|server_error|api_error|internal_error|unavailable)/i, HTTP_STATUS.SERVICE_UNAVAILABLE],
+  [/(authentication|unauthorized|invalid_api_key|expired_token)/i, HTTP_STATUS.UNAUTHORIZED],
+  [/(permission|forbidden|access_denied)/i, HTTP_STATUS.FORBIDDEN]
+];
+
+function toHttpStatus(value) {
+  return Number.isInteger(value) && value >= 400 && value < 600 ? value : null;
+}
+
+export function extractStreamError(chunk) {
+  if (!chunk || typeof chunk !== "object") return null;
+
+  const err = chunk.error;
+  if (err === undefined || err === null) return null;
+
+  if (typeof err === "string") {
+    const text = err.trim();
+    return text ? { statusCode: HTTP_STATUS.BAD_GATEWAY, message: text } : null;
+  }
+
+  if (typeof err !== "object") return null;
+
+  const message = typeof err.message === "string" ? err.message.trim() : "";
+  const type = typeof err.type === "string" ? err.type : "";
+  const code = err.code === undefined || err.code === null ? "" : String(err.code);
+  const statusCode = toHttpStatus(err.status) ?? toHttpStatus(err.code);
+
+  if (!message && !type && !code && err.status === undefined) return null;
+
+  const mapped = statusCode ?? resolveStreamErrorStatusFromHint(`${type} ${code}`);
+  return {
+    statusCode: mapped,
+    message: message || DEFAULT_ERROR_MESSAGES[mapped] || "Upstream provider error"
+  };
+}
+
+function resolveStreamErrorStatusFromHint(hint) {
+  for (const [pattern, status] of STREAM_ERROR_TYPE_STATUS) {
+    if (pattern.test(hint)) return status;
+  }
+  return HTTP_STATUS.BAD_GATEWAY;
+}
+
 // Terminal frames for a stream that aborted after HTTP 200 was already sent, so
 // the status code can no longer change. OpenAI-compatible clients (openai-python
 // raises APIError on any `data:` payload carrying an `error` key, checked before
 // [DONE]) need the error frame first, then [DONE]; Anthropic clients need
 // `event: error`. Never fabricate a successful finish_reason instead.
 //
-// Returns encoded bytes: onAbortTerminal callbacks are enqueued verbatim, same
-// as buildAbortedResponsesTerminalBytes.
+// buildStreamErrorBytes returns encoded bytes: onAbortTerminal callbacks are enqueued
+// verbatim, same as buildAbortedResponsesTerminalBytes.
 //
 // NOTE: non-SSE client formats (Ollama NDJSON) get an SSE frame here — dead in
 // practice because detectFormatByEndpoint never resolves to OLLAMA.
-export function buildStreamErrorBytes(statusCode, message, clientFormat) {
+export function buildStreamErrorFrame(statusCode, message, clientFormat) {
   const { error } = buildErrorBody(statusCode, message);
-
-  const sse = clientFormat === FORMATS.CLAUDE
+  return clientFormat === FORMATS.CLAUDE
     ? formatSSE({ type: "error", error }, FORMATS.CLAUDE)
     : formatSSE({ error }, clientFormat) + SSE_DONE;
+}
 
-  return sharedEncoder.encode(sse);
+export function buildStreamErrorBytes(statusCode, message, clientFormat) {
+  return sharedEncoder.encode(buildStreamErrorFrame(statusCode, message, clientFormat));
 }

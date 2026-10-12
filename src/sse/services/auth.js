@@ -11,6 +11,10 @@ let selectionMutex = Promise.resolve();
 
 const GITHUB_MONTHLY_USAGE_LIMIT = "you've reached your additional usage limit for your plan";
 
+// Synthetic connection id handed out to free providers that need no credentials.
+// There is no DB row behind it, so nothing can be persisted for it.
+const NOAUTH_CONNECTION_ID = "noauth";
+
 function githubMonthlyResetMs(status, errorText, provider) {
   if (resolveProviderId(provider) !== "github" || Number(status) !== 402) return null;
   if (!String(errorText || "").toLowerCase().includes(GITHUB_MONTHLY_USAGE_LIMIT)) return null;
@@ -43,8 +47,11 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     // Resolve alias to provider ID (e.g., "kc" -> "kilocode")
     const providerId = resolveProviderId(provider);
 
-    // Inject a virtual connection for no-auth free providers (with optional proxy pool from settings)
-    if (FREE_PROVIDERS[providerId]?.noAuth) {
+    // Inject a virtual connection for no-auth free providers (with optional proxy pool from settings).
+    // It must honour excludeSet like a real connection does: the account-fallback loop
+    // excludes an id once it fails, and returning the same synthetic credentials again
+    // would spin that loop forever instead of ending it with the upstream error.
+    if (FREE_PROVIDERS[providerId]?.noAuth && !excludeSet.has(NOAUTH_CONNECTION_ID)) {
       const settings = await getSettings();
       const override = (settings.providerStrategies || {})[providerId] || {};
       const strategy = override.rotateStrategy || "none";
@@ -55,8 +62,8 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
         pickedId = pickProxyPoolId(poolIds, strategy, providerId);
       }
       const resolvedProxy = await resolveConnectionProxyConfig({ proxyPoolId: pickedId || "" });
-      return {
-        id: "noauth",
+return {
+      id: NOAUTH_CONNECTION_ID,
         connectionName: "Public",
         isActive: true,
         accessToken: "public",
@@ -243,9 +250,13 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
  * @returns {{ shouldFallback: boolean, cooldownMs: number }}
  */
 export async function markAccountUnavailable(connectionId, status, errorText, provider = null, model = null, resetsAtMs = null) {
-  if (!connectionId || connectionId === "noauth") return { shouldFallback: false, cooldownMs: 0 };
+  if (!connectionId) return { shouldFallback: false, cooldownMs: 0 };
   const connections = await getProviderConnections({ provider });
   const conn = connections.find(c => c.id === connectionId);
+  // A no-auth provider has no row to lock, but the caller still has to be told to move
+  // on: otherwise one exhausted key fails every subsequent request on the spot instead
+  // of letting the loop reach another account or report the upstream error.
+  const isSynthetic = connectionId === NOAUTH_CONNECTION_ID;
   const backoffLevel = conn?.backoffLevel || 0;
 
   // GitHub premium-request exhaustion is account-wide until the next UTC month.
@@ -270,20 +281,23 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   if (!shouldFallback) return { shouldFallback: false, cooldownMs: 0 };
 
   const reason = typeof errorText === "string" ? errorText.slice(0, 200) : "Provider error";
-  const lockUpdate = buildModelLockUpdate(githubResetAtMs ? null : model, cooldownMs);
 
-  await updateProviderConnection(connectionId, {
-    ...lockUpdate,
-    testStatus: "unavailable",
-    lastError: reason,
-    errorCode: status,
-    lastErrorAt: new Date().toISOString(),
-    backoffLevel: newBackoffLevel ?? backoffLevel
-  });
+  if (!isSynthetic) {
+    const lockUpdate = buildModelLockUpdate(githubResetAtMs ? null : model, cooldownMs);
 
-  const lockKey = Object.keys(lockUpdate)[0];
-  const connName = conn?.displayName || conn?.name || conn?.email || connectionId.slice(0, 8);
-  log.warn("AUTH", `${connName} locked ${lockKey} for ${Math.round(cooldownMs / 1000)}s [${status}]`);
+    await updateProviderConnection(connectionId, {
+      ...lockUpdate,
+      testStatus: "unavailable",
+      lastError: reason,
+      errorCode: status,
+      lastErrorAt: new Date().toISOString(),
+      backoffLevel: newBackoffLevel ?? backoffLevel
+    });
+
+    const lockKey = Object.keys(lockUpdate)[0];
+    const connName = conn?.displayName || conn?.name || conn?.email || connectionId.slice(0, 8);
+    log.warn("AUTH", `${connName} locked ${lockKey} for ${Math.round(cooldownMs / 1000)}s [${status}]`);
+  }
 
   if (provider && status && reason) {
     console.error(`❌ ${provider} [${status}]: ${reason}`);
@@ -302,7 +316,7 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
  * @param {string|null} model - model that succeeded
  */
 export async function clearAccountError(connectionId, currentConnection, model = null) {
-  if (!connectionId || connectionId === "noauth") return;
+  if (!connectionId || connectionId === NOAUTH_CONNECTION_ID) return;
   const conn = currentConnection._connection || currentConnection;
   const now = Date.now();
   const allLockKeys = Object.keys(conn).filter(k => k.startsWith("modelLock_"));

@@ -2,7 +2,7 @@ import { translateResponse, initState } from "../translator/index.js";
 import { FORMATS } from "../translator/formats.js";
 import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
 import { extractUsage, mergeUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
-import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE } from "./streamHelpers.js";
+import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE, extractStreamError, buildStreamErrorFrame } from "./streamHelpers.js";
 import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatIncompleteOpenAIResponsesStreamFailure } from "./responsesStreamHelpers.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
 
@@ -87,8 +87,24 @@ export function createSSEStream(options = {}) {
   let openAIResponsesTerminalSeen = false;
   let openAIResponsesDoneSent = false;
   let streamDoneSent = false;  // track duplicate [DONE] across transform + flush
+  let streamErrorStatus = null;  // upstream error frame seen inside a 200 stream
   let finalized = false;
   let completionFlushTimer = null;
+
+  // Emit an upstream error that arrived as an ordinary SSE payload, then stop: the
+  // status code was already committed as 200, so this frame is the client's only
+  // chance to learn the request failed. Nothing after it is trustworthy.
+  const emitStreamError = (controller, chunk) => {
+    const error = extractStreamError(chunk);
+    if (!error) return false;
+    streamErrorStatus = error.statusCode;
+    const output = buildStreamErrorFrame(error.statusCode, error.message, sourceFormat || FORMATS.OPENAI);
+    reqLogger?.appendConvertedChunk?.(output);
+    controller.enqueue(sharedEncoder.encode(output));
+    sseEmittedCount++;
+    finalizeStream();
+    return true;
+  };
 
   // Usage/logging tail, callable from transform() as well as flush(): a client that
   // closes right after the terminal event cancels the reader, and flush() never runs.
@@ -105,7 +121,9 @@ export function createSSEStream(options = {}) {
       if (isPassthrough) usage = finalUsage; else state.usage = finalUsage;
     }
 
-    if (hasValidUsage(finalUsage)) {
+    if (streamErrorStatus !== null) {
+      appendRequestLog({ model, provider, connectionId, tokens: finalUsage, status: `FAILED ${streamErrorStatus}` }).catch(() => { });
+    } else if (hasValidUsage(finalUsage)) {
       logUsage(isPassthrough ? provider : (state?.provider || targetFormat), finalUsage, model, connectionId, apiKey);
     } else {
       appendRequestLog({ model, provider, connectionId, tokens: null, status: "200 OK" }).catch(() => { });
@@ -135,6 +153,7 @@ export function createSSEStream(options = {}) {
 
   return new TransformStream({
     transform(chunk, controller) {
+      if (streamErrorStatus !== null) return;
       if (!ttftAt) ttftAt = Date.now();
       const text = decoder.decode(chunk, { stream: true });
       buffer += text;
@@ -167,6 +186,8 @@ export function createSSEStream(options = {}) {
           if (trimmed.startsWith("data:") && trimmed.slice(5).trim() !== "[DONE]") {
             try {
               const parsed = JSON.parse(trimmed.slice(5).trim());
+
+              if (emitStreamError(controller, parsed)) return;
 
               const idFixed = fixInvalidId(parsed);
 
@@ -272,6 +293,8 @@ export function createSSEStream(options = {}) {
 
         const parsed = parseSSELine(trimmed, targetFormat);
         if (!parsed) continue;
+
+        if (emitStreamError(controller, parsed)) return;
 
         // Responses API same-format passthrough: preserve event framing + track terminal state
         const isOpenAIResponsesStream = targetFormat === FORMATS.OPENAI_RESPONSES;
@@ -460,6 +483,9 @@ export function createSSEStream(options = {}) {
           // accepts "data: " lines, so an NDJSON provider (Ollama) lost whatever
           // arrived without its closing newline.
           const parsed = parseSSELine(buffer.trim(), targetFormat);
+          if (parsed && emitStreamError(controller, parsed)) {
+            return;
+          }
           // parseSSELine turns the SSE sentinel "data: [DONE]" into { done: true },
           // which must not be translated. An Ollama chunk also carries done:true,
           // but it is the real final chunk — it holds finish_reason and the token
