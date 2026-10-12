@@ -24,7 +24,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { BaseExecutor } from "./base.js";
-import { rpc, resolveWorkspaceCwd, buildPromptText, extractMessages } from "./lib/acpCommon.js";
+import { rpc, resolveWorkspaceCwd, buildPromptText, extractMessages, agentSpawnCommand } from "./lib/acpCommon.js";
 
 // ─── Binary discovery ────────────────────────────────────────────────────────
 
@@ -281,11 +281,17 @@ export class DevinCliExecutor extends BaseExecutor {
         // inject WINDSURF_API_KEY: this provider is noAuth, and a bogus/leaked key
         // overrides stored creds and makes devin return -32000 "invalid api key".
         const env = { ...process.env };
-        // Auto-approve tool execution so the agent doesn't block waiting for a
-        // session/request_permission response we never send (default mode would
-        // hang the stream on the first shell/exec tool call). Override via env.
-        // WARNING: bypass lets the agent run shell/modify FS unattended — local only.
-        env.DEVIN_PERMISSION_MODE = process.env.DEVIN_PERMISSION_MODE || "bypass";
+        // DEVIN_PERMISSION_MODE is deliberately NOT defaulted to "bypass" here.
+        // An explicit CLI_DEVIN_PERMISSION_MODE / DEVIN_PERMISSION_MODE in the
+        // environment still passes through via the spread above.
+        //
+        // Leaving the agent in its own default mode means it asks before running
+        // shell/exec tools, and this executor answers those requests below. That
+        // is strictly safer than blanket authority: the grant is routed through
+        // 9router, so it is logged and attributable instead of invisible. Using
+        // bypass did not change what was approved — the handler below approves
+        // every request either way.
+        if (mcpConfigDir) env.XDG_CONFIG_HOME = mcpConfigDir;
         if (mcpConfigDir) env.XDG_CONFIG_HOME = mcpConfigDir;
 
         // Agent type: default (omitted) = full agent with built-in tools
@@ -300,12 +306,12 @@ export class DevinCliExecutor extends BaseExecutor {
         // Spawn in the client workspace cwd (from <cwd> env context) so built-in
         // file tools create/delete relative paths in the user's project.
         // MCP config still comes from XDG_CONFIG_HOME (throwaway), not project .devin/.
-        const child = spawn(devinBin, acpArgs, {
+        const { cmd, args: spawnArgs, shell } = agentSpawnCommand(devinBin, acpArgs);
+        const child = spawn(cmd, spawnArgs, {
           env,
           cwd: workspaceCwd,
           stdio: ["pipe", "pipe", "pipe"],
-          // On Windows, devin.exe may need shell resolution
-          shell: process.platform === "win32",
+          shell,
         });
 
         let spawnError = null;
@@ -548,15 +554,21 @@ export class DevinCliExecutor extends BaseExecutor {
               continue;
             }
 
-            // ── Permission requests → auto-approve the first allow option ──
-            // Devi asks before running shell/exec tools; as a headless proxy we
-            // grant once. (DEVIN_PERMISSION_MODE=bypass usually prevents these,
-            // but some tool kinds still prompt, so handle them here too.)
+            // ── Permission requests → approve, but log every grant ──
+            // Devin asks before running shell/exec tools; as a headless proxy we
+            // have nobody to prompt, so we approve. The approval is recorded here
+            // rather than hidden behind the agent's bypass mode, which would give
+            // it blanket authority with no trace.
             if (msg.method === "session/request_permission" && msg.id !== undefined) {
               const options = msg.params?.options || [];
               const allow =
                 options.find((o) => /allow/i.test(String(o.kind || ""))) || options[0];
               if (allow) {
+                console.warn(
+                  `[devin-cli] approving ${String(allow.kind || "unspecified")} ` +
+                  `permission for tool ${String(msg.params?.toolCallId || "?")} ` +
+                  "(no operator to prompt — 9router runs this provider headless)"
+                );
                 child.stdin.write(
                   JSON.stringify({
                     jsonrpc: "2.0",

@@ -43,7 +43,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { BaseExecutor } from "../base.js";
-import { rpc, resolveWorkspaceCwd, buildPromptText, extractMessages, estimateTokens } from "./acpCommon.js";
+import { rpc, resolveWorkspaceCwd, buildPromptText, extractMessages, estimateTokens, agentSpawnCommand } from "./acpCommon.js";
 
 const ACP_URL = "acp://stdio";
 
@@ -349,11 +349,12 @@ export class AcpAgentExecutor extends BaseExecutor {
         // key here would override the agent's own credentials.
         const env = { ...process.env };
 
-        const child = spawn(bin, args, {
+        const { cmd, args: spawnArgs, shell } = agentSpawnCommand(bin, args);
+        const child = spawn(cmd, spawnArgs, {
           env,
           cwd: workspaceCwd,
           stdio: ["pipe", "pipe", "pipe"],
-          shell: process.platform === "win32",
+          shell,
         });
 
         let spawnError = null;

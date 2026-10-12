@@ -22,6 +22,28 @@ export function rpc(method, params, id) {
   return JSON.stringify(msg) + "\n";
 }
 
+// ─── Spawning agent binaries ────────────────────────────────────────────────
+
+// Never let the shell interpret the command line. On POSIX `shell:false` already
+// spawns the file directly, but the Windows branch used `shell:true`, which hands
+// the whole command string to cmd.exe: a binary path or argument containing
+// cmd.exe metacharacters ("&", "|", "^", "%") becomes command injection. The
+// executable path is reachable from the environment (CLI_CURSOR_BIN and friends),
+// so that input is not fully trusted.
+//
+// Windows .cmd/.bat shims cannot be executed directly, so they are routed
+// through cmd.exe explicitly — with the path quoted and any embedded quote
+// rejected, rather than trusting a shell to quote it for us.
+export function agentSpawnCommand(bin, args) {
+  const isCmdShim = process.platform === "win32" && /\.(cmd|bat)$/i.test(bin);
+  if (!isCmdShim) return { cmd: bin, args, shell: false };
+  if (bin.includes('"')) {
+    throw new Error(`refusing to spawn through cmd.exe: path contains a quote: ${bin}`);
+  }
+  const comSpec = process.env.ComSpec || "cmd.exe";
+  return { cmd: comSpec, args: ["/d", "/s", "/c", `"${bin}"`, ...args], shell: false };
+}
+
 // ─── Workspace resolution ───────────────────────────────────────────────────
 
 // Resolve workspace cwd from the client request (Codex/CLI env context, body
