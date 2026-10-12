@@ -40,12 +40,22 @@ npx vitest run unit/capabilities.test.js   # single file (path relative to tests
 ```
 > The committed `tests/package.json` `test` script hardcodes Unix paths (`NODE_PATH=/tmp/node_modules …`) — a shared-install workaround from upstream. On Windows (or anywhere), ignore it and use the `npx vitest` form above; `vitest.config.js` resolves the `open-sse`/`@/` aliases from the repo root regardless of where vitest lives.
 >
-> **The suite is NOT expected to be all-green on a plain checkout.** ~938 pass, ~64 fail. Judge regressions with `tests/__baseline__/verify-no-regression.mjs`, not a raw run. Expected red:
-> - 26 catalogued in `tests/__baseline__/known-fails.txt` (rtk, oauth-cursor-auto-import, translator-request-normalization, …).
+> **The suite is NOT expected to be all-green on a plain checkout.** ~3433 pass, 88 fail, 100 skipped. Judge regressions with `tests/__baseline__/verify-no-regression.mjs`, not a raw run.
+>
+> ```bash
+> npx vitest run --reporter=json --outputFile=/tmp/9r-results.json   # the gate needs the JSON report
+> node __baseline__/verify-no-regression.mjs /tmp/9r-results.json       # exit 1 on regression
+> ```
+>
+> The gate diffs against `tests/__baseline__/known-fails.txt` — **94 entries** (88 failed assertions + 6 suites that fail to collect). A collect-failure counts as one failure under the suite name, so a broken import surfaces instead of vanishing; a suite yielding *zero* assertions used to be skipped outright, which hid real breakage.
+>
+> Expected red, all catalogued in the baseline:
+> - `unit/saml.test.js`, `unit/cline-auth.test.js`, `unit/kimchi.test.js`, `unit/kimchi-strip-reasoning.test.js` import `describe`/`it` from `node:test` instead of `vitest` → "No test suite found". Pre-existing mixing of two runners in the suite.
 > - `unit/embeddings.cloud.test.js` imports `cloud/src/handlers/embeddings.js` — the `cloud/` worker dir is **not in this repo**, so it always fails here.
-> - `unit/xai-oauth-service.test.js` times out (5s) when the xAI endpoint-discovery fetch isn't reachable/mocked.
-> - `real/*.real.test.js` make live provider calls — need credentials, skip otherwise.
-- `*.real.test.js` under `tests/translator/real/` make live provider calls — skip unless credentials are set.
+> - `unit/db-benchmark.test.js` reads SQLite rows the test never creates.
+> - `unit/cursor-models.test.js` mocks `global.fetch`, but production goes through `http2PostProto` (`node:http2`); `agent.api5.cursor.sh` is HTTP/2-only, which Node's fetch/undici cannot speak. Stale test — needs a rewrite, not an ignore.
+>
+> `*.real.test.js` under `tests/translator/real/` and `*.live.test.js` make live provider calls — gated behind `RUN_REAL=1` and excluded from the baseline.
 - Regression baselines: `tests/__baseline__/verify-*.mjs` compare against committed snapshots (providers, aliases, OAuth URLs). Run these after touching provider registry / alias logic.
 
 ## Architecture
