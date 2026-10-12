@@ -353,9 +353,13 @@ describe("DevinCliExecutor ACP session/new", () => {
     }
   });
 
-  it("sets DEVIN_PERMISSION_MODE=bypass so tool calls don't hang on permission prompts", async () => {
+  it("does not force DEVIN_PERMISSION_MODE=bypass — approvals go through the router", async () => {
+    // Bypass hands the agent blanket authority with no trace. The stream still
+    // does not hang on permission prompts, because session/request_permission is
+    // answered below; that guarantee is asserted separately, and every approval is
+    // now logged rather than hidden inside the agent.
     const { child } = await runExecute();
-    expect(child.opts.env.DEVIN_PERMISSION_MODE).toBe("bypass");
+    expect(child.opts.env.DEVIN_PERMISSION_MODE).toBeUndefined();
   });
 
   it("does not inject WINDSURF_API_KEY — devin-cli uses stored CLI creds (devin auth login)", async () => {

@@ -597,6 +597,25 @@ exports[`GOLDEN buildHeaders (default executor providers) > codebuddy-intl → h
 }
 `;
 
+exports[`GOLDEN buildHeaders (default executor providers) > codex-acp → headers (apiKey / oauth) 1`] = `
+{
+  "apiKey": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+  "nonStream": {
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+  "oauth": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+}
+`;
+
 exports[`GOLDEN buildHeaders (default executor providers) > cohere → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
@@ -1274,7 +1293,45 @@ exports[`GOLDEN buildHeaders (default executor providers) > ollama → headers (
 }
 `;
 
+exports[`GOLDEN buildHeaders (default executor providers) > omp-acp → headers (apiKey / oauth) 1`] = `
+{
+  "apiKey": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+  "nonStream": {
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+  "oauth": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+}
+`;
+
 exports[`GOLDEN buildHeaders (default executor providers) > openai → headers (apiKey / oauth) 1`] = `
+{
+  "apiKey": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+  "nonStream": {
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+  "oauth": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+}
+`;
+
+exports[`GOLDEN buildHeaders (default executor providers) > opencode-acp → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
     "Accept": "text/event-stream",
@@ -1819,6 +1876,13 @@ exports[`GOLDEN buildUrl (default executor providers) > codebuddy-intl → url (
 }
 `;
 
+exports[`GOLDEN buildUrl (default executor providers) > codex-acp → url (stream + non-stream) 1`] = `
+{
+  "nonStream": "codex://acp/stdio",
+  "stream": "codex://acp/stdio",
+}
+`;
+
 exports[`GOLDEN buildUrl (default executor providers) > cohere → url (stream + non-stream) 1`] = `
 {
   "nonStream": "https://api.cohere.ai/v1/chat/completions",
@@ -2036,10 +2100,24 @@ exports[`GOLDEN buildUrl (default executor providers) > ollama → url (stream +
 }
 `;
 
+exports[`GOLDEN buildUrl (default executor providers) > omp-acp → url (stream + non-stream) 1`] = `
+{
+  "nonStream": "omp://acp/stdio",
+  "stream": "omp://acp/stdio",
+}
+`;
+
 exports[`GOLDEN buildUrl (default executor providers) > openai → url (stream + non-stream) 1`] = `
 {
   "nonStream": "https://api.openai.com/v1/chat/completions",
   "stream": "https://api.openai.com/v1/chat/completions",
+}
+`;
+
+exports[`GOLDEN buildUrl (default executor providers) > opencode-acp → url (stream + non-stream) 1`] = `
+{
+  "nonStream": "opencode://acp/stdio",
+  "stream": "opencode://acp/stdio",
 }
 `;
 
