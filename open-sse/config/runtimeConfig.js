@@ -67,6 +67,41 @@ export const DEFAULT_MIN_TOKENS = 32000;
 
 export const TOKEN_SAVER_HEADER = "x-9router-token-saver";
 
+// ─── ACP agent permissions ───────────────────────────────────────────────────
+// When an ACP agent wants to run a tool it asks the client
+// (session/request_permission) and blocks the turn until it is answered.
+// 9router is a headless proxy with nobody to prompt, so it decides from policy.
+//
+// Per-action, split by whether the target is inside the agent's working
+// directory. `execute` and `delete` are split like the others only so the shape
+// stays uniform — a shell can reach anything, so scoping them by location buys
+// nothing on its own; set them to `deny` if that is the point.
+//
+// Values:
+//   always — allow, and answer with the agent's own `allow_always` option so it
+//            stops asking for the rest of the session (an ACP session is one
+//            request, so "this session" == "this call chain")
+//   once   — allow this single call; the agent may ask again
+//   deny   — refuse with `reject_once`. The agent marks the tool failed and
+//            finishes the turn normally, so refusing is safe, not fatal.
+export const ACP_PERMISSION_ACTIONS = ["read", "search", "edit", "move", "delete", "execute", "fetch", "other"];
+
+export const ACP_PERMISSION_VALUES = ["always", "once", "deny"];
+
+export const ACP_PERMISSION_HEADER = "x-9router-acp-permissions";
+
+// Body-level equivalent of the header, for clients that cannot set headers.
+export const ACP_PERMISSION_BODY_KEY = "acp_permissions";
+
+// Permissive by default: the agent is a local process running as the user and
+// would act regardless of what we answer, so refusing only removes capability
+// the user asked for by driving an agent. Tighten per action in the dashboard.
+export const DEFAULT_ACP_PERMISSIONS = Object.freeze(
+  Object.fromEntries(
+    ACP_PERMISSION_ACTIONS.map((action) => [action, Object.freeze({ inside: "always", outside: "always" })])
+  )
+);
+
 // Retry config for 429 responses (legacy - kept for backward compatibility)
 export const RETRY_CONFIG = {
   maxAttempts: 2,

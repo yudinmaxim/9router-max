@@ -197,12 +197,16 @@ describe("ACP permission requests (headless approval)", () => {
     expect(answered).toBe(true);
   });
 
-  it("falls back to the first option when none look like an allow", async () => {
+  it("refuses an option it cannot classify rather than granting it blindly", async () => {
+    // Previously the handler fell back to `options[0]` when nothing looked like
+    // an allow, which meant an option whose meaning we do not understand got
+    // granted. The policy handler matches the requested decision against the
+    // agent's options and cancels when there is no match.
     const child = makePermissionGatedChild({
       options: [{ optionId: "only", name: "Only", kind: "something_else" }],
     });
     await runWith(child);
-    expect(child.permissionAnswers).toEqual(["only"]);
+    expect(child.permissionAnswers).toEqual(["cancelled"]);
   });
 
   it("cancels rather than stalling when the agent offers no options", async () => {

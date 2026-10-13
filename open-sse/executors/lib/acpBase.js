@@ -54,6 +54,16 @@ import os from "node:os";
 import fs from "node:fs";
 import { BaseExecutor } from "../base.js";
 import { rpc, resolveWorkspaceCwd, buildPromptText, extractMessages, estimateTokens, agentSpawnCommand } from "./acpCommon.js";
+import {
+  classifyAction,
+  rememberToolKind,
+  targetPaths,
+  decidePermission,
+  mergePolicies,
+  parsePolicyInput,
+  chooseOption,
+} from "./acpPermissions.js";
+import { ACP_PERMISSION_HEADER, ACP_PERMISSION_BODY_KEY } from "../../config/runtimeConfig.js";
 
 const ACP_URL = "acp://stdio";
 
@@ -352,13 +362,29 @@ export class AcpAgentExecutor extends BaseExecutor {
     return false;
   }
 
-  async execute({ model, body, signal, log }) {
+  async execute({ model, body, credentials, acpPermissions, signal, log }) {
     const { exe, envVar, args, tag, label, installHint, errorType, versionsDir, extraDirs } = this.acp;
     const b = body ?? {};
     const messages = extractMessages(b);
     const promptText = buildPromptText(messages);
     const workspaceCwd = resolveWorkspaceCwd(b);
     const bin = resolveAgentBin({ envVar, exe, versionsDir, extraDirs });
+
+    // Permission policy, most specific last: router default → per-connection →
+    // request body → request header. The request layers let a client loosen or
+    // tighten for one call without persisting anything.
+    const rawHeaders = credentials?.rawHeaders || {};
+    const headerValue = rawHeaders[ACP_PERMISSION_HEADER];
+    const bodyValue = b?.metadata?.[ACP_PERMISSION_BODY_KEY];
+    const policy = mergePolicies(
+      acpPermissions,
+      parsePolicyInput(bodyValue),
+      parsePolicyInput(Array.isArray(headerValue) ? headerValue[0] : headerValue)
+    );
+    // `toolCallId → kind`, filled from session/update as the agent narrates its
+    // own tools. The permission request reports `kind: "other"` for everything,
+    // so this map is the only truthful source of what the action is.
+    const seenToolKinds = new Map();
 
     log?.info?.(tag, `${exe} ${args.join(" ")} → model=${model}, bin=${bin}, cwd=${workspaceCwd}`);
 
@@ -622,30 +648,44 @@ export class AcpAgentExecutor extends BaseExecutor {
               return;
             }
 
-            // ── permission requests → approve, but log every grant ────────
+            // ── permission requests → decided by policy, always answered ──
             // The agent blocks the turn until this is answered: left hanging,
             // a prompt that touches a tool never returns (verified against
             // `opencode acp` — it emits tool_call pending/in_progress, then
-            // waits on session/request_permission indefinitely).
-            // 9router is a headless proxy with nobody to prompt, so we select
-            // the allow-ish option. The grant is recorded here rather than
-            // hidden behind the agent's bypass mode, which would give it
-            // blanket authority with no trace.
+            // waits on session/request_permission indefinitely). 9router is a
+            // headless proxy with nobody to prompt, so it answers from the
+            // configured policy instead of blanket-approving.
             if (msg.method === "session/request_permission" && msg.id !== undefined && msg.id !== null) {
-              const options = msg.params?.options || [];
-              const allow =
-                options.find((o) => /allow/i.test(String(o.kind || ""))) || options[0];
-              if (allow) {
-                log?.debug?.(
-                  tag,
-                  `approving ${String(allow.kind || "unspecified")} permission for ` +
-                    `tool ${String(msg.params?.toolCallId || "?")} ` +
-                    "(no operator to prompt — 9router runs this provider headless)"
-                );
+              const toolCall = msg.params?.toolCall || {};
+              const action = classifyAction(toolCall, seenToolKinds);
+              const paths = targetPaths(toolCall);
+              const decided = decidePermission({
+                action,
+                paths,
+                policy,
+                workspaceCwd,
+                log,
+              });
+              const option = chooseOption(msg.params?.options, decided.value);
+
+              if (option) {
+                if (decided.value === "deny") {
+                  log?.warn?.(
+                    tag,
+                    `refusing ${action} for ${String(toolCall.toolCallId || "?")} — ` +
+                      `${decided.reason}; policy says deny`
+                  );
+                } else {
+                  log?.debug?.(
+                    tag,
+                    `${decided.value === "always" ? "approving for session" : "approving"} ` +
+                      `${action} for ${String(toolCall.toolCallId || "?")} — ${decided.reason}`
+                  );
+                }
                 sendRpcRaw({
                   jsonrpc: "2.0",
                   id: msg.id,
-                  result: { outcome: { outcome: "selected", optionId: allow.optionId } },
+                  result: { outcome: { outcome: "selected", optionId: option.optionId } },
                 });
               } else {
                 // Nothing to select. We must still answer — an unanswered
@@ -653,7 +693,7 @@ export class AcpAgentExecutor extends BaseExecutor {
                 // the caller as a hang with no error. Cancelling is the honest
                 // outcome: it tells the agent to stop rather than proceed
                 // unapproved, and it lets the turn terminate.
-                log?.debug?.(tag, "session/request_permission had no options — cancelling");
+                log?.debug?.(tag, `session/request_permission had no options — cancelling (${action})`);
                 sendRpcRaw({
                   jsonrpc: "2.0",
                   id: msg.id,
@@ -687,6 +727,10 @@ export class AcpAgentExecutor extends BaseExecutor {
                 const content = update.content ?? params.content;
                 emitReasoning(typeof content === "string" ? content : (content?.text ?? ""));
               } else if (type === "tool_call" || type === "tool_call_update") {
+                // Remembers what kind of action this is. The permission request
+                // that follows reports `kind: "other"`, so this notification is
+                // where the real answer lives.
+                rememberToolKind(seenToolKinds, update);
                 // The agent runs its own tools against its own sandbox — these
                 // are progress reports, not calls the client should service.
                 // Surfacing them as OpenAI tool_calls would re-run them

@@ -64,6 +64,12 @@ const DEFAULT_SETTINGS = {
   pxpipeTimeoutMs: 15000,
   // Per-provider user header overrides applied at dispatch: { [providerId]: { headers: {..} } }
   providerOverrides: {},
+  // ACP agent permissions. Router-wide default, overridden per provider below.
+  // Empty means "use DEFAULT_ACP_PERMISSIONS in open-sse/config/runtimeConfig.js",
+  // which is permissive; leaving it empty is what keeps older DBs working.
+  acpPermissions: {},
+  // Per-provider overrides: { [providerId]: { [action]: { inside, outside } } }
+  acpPermissionsByProvider: {},
 };
 
 async function readRaw() {

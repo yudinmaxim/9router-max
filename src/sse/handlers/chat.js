@@ -20,6 +20,7 @@ import { handleComboChat, handleFusionChat, detectRequiredCapabilities } from "o
 import { augmentModelsWithCapacityAdapter, withCapacityAdapterStripping, getActiveAdapterStrategy } from "open-sse/services/capacityAdapter.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
+import { mergePolicies as mergeAcpPermissionLayers } from "open-sse/executors/lib/acpPermissions.js";
 import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
@@ -306,6 +307,13 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       providerThinking,
       // Per-provider user overrides (custom headers / connect timeout) from settings
       providerOverrides: (chatSettings.providerOverrides || {})[provider] || null,
+      // ACP agent permissions: router-wide default, then this provider's override.
+      // Only passed for ACP providers, but harmless to compute unconditionally —
+      // the engine ignores it for everything else.
+      acpPermissions: mergeAcpPermissionLayers(
+        chatSettings.acpPermissions,
+        (chatSettings.acpPermissionsByProvider || {})[provider]
+      ),
       // Detect source format by endpoint + body
       sourceFormatOverride: request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null,
       onCredentialsRefreshed: async (newCreds) => {
