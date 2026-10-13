@@ -6,9 +6,9 @@
  *
  * omp's model catalog comes entirely from `~/.omp/agent/config.yml`. On a machine
  * where omp is configured to talk to 9router — the normal setup when omp is used
- * directly as a Zed agent — that file lists a single model, `nine-router/oc-robust`,
- * which is by definition 9router itself. Registering this provider would then mean
- * 9router spawns omp, which calls 9router.
+ * directly as a Zed agent — that file resolves its model roles to
+ * `nine-router/ca/...`, which is by definition 9router itself. Registering this
+ * provider would then mean 9router spawns omp, which calls 9router.
  *
  * The executor's `isSelfRouted` guard rejects those ids rather than following the
  * loop, so requests fail with a clear upstream error instead of recursing. That is

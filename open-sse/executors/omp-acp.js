@@ -9,9 +9,10 @@
  *   - `session/new` returns `configOptions` with `mode` listed FIRST, so the
  *     model option must be found by `id`, never by position.
  *
- * Note: a stock omp install may have its `model` option pointing back at this
- * router (`nine-router/oc-robust`). The base class screens self-routed models
- * out of the catalog and refuses the turn rather than looping.
+ * Note: an omp install used as a Zed agent normally points back at this router
+ * (its modelRoles read `nine-router/ca/...`). The base class screens
+ * self-routed models out of the catalog and refuses the turn rather than
+ * looping, so such an install cannot drive this provider.
  *
  * Binary discovery: CLI_OMP_BIN env → known paths → PATH.
  */

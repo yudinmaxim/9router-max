@@ -177,8 +177,8 @@ function canonModelName(modelId) {
 /**
  * A model that routes back into this router would make the agent call the
  * gateway that spawned it — an unbounded loop. Users do configure their CLIs
- * that way (omp's default `model` option is literally `nine-router/oc-robust`),
- * so the catalog has to be screened, not trusted.
+ * that way — an omp used as a Zed agent resolves its `model` option to
+ * `nine-router/ca/...` — so the catalog has to be screened, not trusted.
  */
 export function isSelfRouted(modelId) {
   return /(nine-?router|9router|localhost:2012[78]|127\.0\.0\.1:2012[78])/i.test(String(modelId || ""));
