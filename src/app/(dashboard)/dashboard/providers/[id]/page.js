@@ -24,6 +24,7 @@ import AddCustomModelModal from "./AddCustomModelModal";
 import BulkImportCodexModal from "./BulkImportCodexModal";
 import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
 import CustomConfigCard from "./CustomConfigCard";
+import AcpPermissionsCard from "./AcpPermissionsCard";
 
 const ONE_BY_ONE_DELAY_MS = 1000;
 
@@ -40,6 +41,9 @@ export default function ProviderDetailPage() {
   const params = useParams();
   const router = useRouter();
   const providerId = params.id;
+  // Only these providers spawn a local CLI agent over ACP, and only a spawned
+  // agent can ask the router to approve an action on the machine.
+  const isAcpProvider = providerId.endsWith("-acp");
   const { getCaps } = useModelCaps();
   const [connections, setConnections] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1746,6 +1750,10 @@ export default function ProviderDetailPage() {
 
       {/* Per-provider user overrides (custom headers / connect timeout) */}
       <CustomConfigCard providerId={providerId} />
+
+      {/* Tool permissions for CLI agents driven over ACP. Only these providers
+          spawn a local agent that can act on the machine, so only they ask. */}
+      {isAcpProvider && <AcpPermissionsCard providerId={providerId} />}
 
       {/* Models */}
       <Card>
