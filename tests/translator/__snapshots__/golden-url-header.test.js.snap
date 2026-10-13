@@ -240,22 +240,6 @@ exports[`GOLDEN buildHeaders (default executor providers) > bazaarlink → heade
 }
 `;
 
-exports[`GOLDEN buildHeaders (default executor providers) > bedrock → headers (apiKey / oauth) 1`] = `
-{
-  "apiKey": "THROW: Cannot read properties of undefined (reading 'header')",
-  "nonStream": "THROW: Cannot read properties of undefined (reading 'header')",
-  "oauth": "THROW: Cannot read properties of undefined (reading 'header')",
-}
-`;
-
-exports[`GOLDEN buildHeaders (default executor providers) > bedrock-xai → headers (apiKey / oauth) 1`] = `
-{
-  "apiKey": "THROW: Cannot read properties of undefined (reading 'header')",
-  "nonStream": "THROW: Cannot read properties of undefined (reading 'header')",
-  "oauth": "THROW: Cannot read properties of undefined (reading 'header')",
-}
-`;
-
 exports[`GOLDEN buildHeaders (default executor providers) > blackbox → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
@@ -597,45 +581,7 @@ exports[`GOLDEN buildHeaders (default executor providers) > codebuddy-intl → h
 }
 `;
 
-exports[`GOLDEN buildHeaders (default executor providers) > codex-acp → headers (apiKey / oauth) 1`] = `
-{
-  "apiKey": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "nonStream": {
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "oauth": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-}
-`;
-
 exports[`GOLDEN buildHeaders (default executor providers) > cohere → headers (apiKey / oauth) 1`] = `
-{
-  "apiKey": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "nonStream": {
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "oauth": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-}
-`;
-
-exports[`GOLDEN buildHeaders (default executor providers) > cursor-acp → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
     "Accept": "text/event-stream",
@@ -831,30 +777,21 @@ exports[`GOLDEN buildHeaders (default executor providers) > glm-cn → headers (
 }
 `;
 
-exports[`GOLDEN buildHeaders (default executor providers) > grok-cli → headers (apiKey / oauth) 1`] = `
+exports[`GOLDEN buildHeaders (default executor providers) > grok-web → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
     "Accept": "text/event-stream",
     "Authorization": "Bearer <TOK>",
     "Content-Type": "application/json",
-    "User-Agent": "grok-shell/1.0.44 (linux; x86_64)",
-    "x-grok-client-identifier": "grok-shell",
-    "x-grok-client-version": "1.0.44",
   },
   "nonStream": {
     "Authorization": "Bearer <TOK>",
     "Content-Type": "application/json",
-    "User-Agent": "grok-shell/1.0.44 (linux; x86_64)",
-    "x-grok-client-identifier": "grok-shell",
-    "x-grok-client-version": "1.0.44",
   },
   "oauth": {
     "Accept": "text/event-stream",
     "Authorization": "Bearer <TOK>",
     "Content-Type": "application/json",
-    "User-Agent": "grok-shell/1.0.44 (linux; x86_64)",
-    "x-grok-client-identifier": "grok-shell",
-    "x-grok-client-version": "1.0.44",
   },
 }
 `;
@@ -1159,25 +1096,6 @@ exports[`GOLDEN buildHeaders (default executor providers) > mistral → headers 
 }
 `;
 
-exports[`GOLDEN buildHeaders (default executor providers) > mmf → headers (apiKey / oauth) 1`] = `
-{
-  "apiKey": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "nonStream": {
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "oauth": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-}
-`;
-
 exports[`GOLDEN buildHeaders (default executor providers) > morph → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
@@ -1293,45 +1211,7 @@ exports[`GOLDEN buildHeaders (default executor providers) > ollama → headers (
 }
 `;
 
-exports[`GOLDEN buildHeaders (default executor providers) > omp-acp → headers (apiKey / oauth) 1`] = `
-{
-  "apiKey": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "nonStream": {
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "oauth": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-}
-`;
-
 exports[`GOLDEN buildHeaders (default executor providers) > openai → headers (apiKey / oauth) 1`] = `
-{
-  "apiKey": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "nonStream": {
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "oauth": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-}
-`;
-
-exports[`GOLDEN buildHeaders (default executor providers) > opencode-acp → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
     "Accept": "text/event-stream",
@@ -1413,7 +1293,7 @@ exports[`GOLDEN buildHeaders (default executor providers) > perplexity-agent →
 }
 `;
 
-exports[`GOLDEN buildHeaders (default executor providers) > poolside → headers (apiKey / oauth) 1`] = `
+exports[`GOLDEN buildHeaders (default executor providers) > perplexity-web → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
     "Accept": "text/event-stream",
@@ -1432,7 +1312,7 @@ exports[`GOLDEN buildHeaders (default executor providers) > poolside → headers
 }
 `;
 
-exports[`GOLDEN buildHeaders (default executor providers) > qoder-cn → headers (apiKey / oauth) 1`] = `
+exports[`GOLDEN buildHeaders (default executor providers) > poolside → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
     "Accept": "text/event-stream",
@@ -1641,25 +1521,6 @@ exports[`GOLDEN buildHeaders (default executor providers) > xai → headers (api
 }
 `;
 
-exports[`GOLDEN buildHeaders (default executor providers) > xiaomi-mimo → headers (apiKey / oauth) 1`] = `
-{
-  "apiKey": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "nonStream": {
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "oauth": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-}
-`;
-
 exports[`GOLDEN buildHeaders (default executor providers) > zed → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
@@ -1766,20 +1627,6 @@ exports[`GOLDEN buildUrl (default executor providers) > bazaarlink → url (stre
 }
 `;
 
-exports[`GOLDEN buildUrl (default executor providers) > bedrock → url (stream + non-stream) 1`] = `
-{
-  "nonStream": "https://bedrock-runtime.{region}.amazonaws.com",
-  "stream": "https://bedrock-runtime.{region}.amazonaws.com",
-}
-`;
-
-exports[`GOLDEN buildUrl (default executor providers) > bedrock-xai → url (stream + non-stream) 1`] = `
-{
-  "nonStream": "https://bedrock-runtime.{region}.amazonaws.com",
-  "stream": "https://bedrock-runtime.{region}.amazonaws.com",
-}
-`;
-
 exports[`GOLDEN buildUrl (default executor providers) > blackbox → url (stream + non-stream) 1`] = `
 {
   "nonStream": "https://api.blackbox.ai/v1/chat/completions",
@@ -1857,24 +1704,10 @@ exports[`GOLDEN buildUrl (default executor providers) > codebuddy-intl → url (
 }
 `;
 
-exports[`GOLDEN buildUrl (default executor providers) > codex-acp → url (stream + non-stream) 1`] = `
-{
-  "nonStream": "codex://acp/stdio",
-  "stream": "codex://acp/stdio",
-}
-`;
-
 exports[`GOLDEN buildUrl (default executor providers) > cohere → url (stream + non-stream) 1`] = `
 {
   "nonStream": "https://api.cohere.ai/v1/chat/completions",
   "stream": "https://api.cohere.ai/v1/chat/completions",
-}
-`;
-
-exports[`GOLDEN buildUrl (default executor providers) > cursor-acp → url (stream + non-stream) 1`] = `
-{
-  "nonStream": "cursor://acp/stdio",
-  "stream": "cursor://acp/stdio",
 }
 `;
 
@@ -1941,10 +1774,10 @@ exports[`GOLDEN buildUrl (default executor providers) > glm-cn → url (stream +
 }
 `;
 
-exports[`GOLDEN buildUrl (default executor providers) > grok-cli → url (stream + non-stream) 1`] = `
+exports[`GOLDEN buildUrl (default executor providers) > grok-web → url (stream + non-stream) 1`] = `
 {
-  "nonStream": "https://cli-chat-proxy.grok.com/v1/responses",
-  "stream": "https://cli-chat-proxy.grok.com/v1/responses",
+  "nonStream": "https://grok.com/rest/app-chat/conversations/new",
+  "stream": "https://grok.com/rest/app-chat/conversations/new",
 }
 `;
 
@@ -2032,13 +1865,6 @@ exports[`GOLDEN buildUrl (default executor providers) > mistral → url (stream 
 }
 `;
 
-exports[`GOLDEN buildUrl (default executor providers) > mmf → url (stream + non-stream) 1`] = `
-{
-  "nonStream": "https://api.xiaomimimo.com/api/free-ai/openai/chat",
-  "stream": "https://api.xiaomimimo.com/api/free-ai/openai/chat",
-}
-`;
-
 exports[`GOLDEN buildUrl (default executor providers) > morph → url (stream + non-stream) 1`] = `
 {
   "nonStream": "https://api.morphllm.com/v1/chat/completions",
@@ -2081,24 +1907,10 @@ exports[`GOLDEN buildUrl (default executor providers) > ollama → url (stream +
 }
 `;
 
-exports[`GOLDEN buildUrl (default executor providers) > omp-acp → url (stream + non-stream) 1`] = `
-{
-  "nonStream": "omp://acp/stdio",
-  "stream": "omp://acp/stdio",
-}
-`;
-
 exports[`GOLDEN buildUrl (default executor providers) > openai → url (stream + non-stream) 1`] = `
 {
   "nonStream": "https://api.openai.com/v1/chat/completions",
   "stream": "https://api.openai.com/v1/chat/completions",
-}
-`;
-
-exports[`GOLDEN buildUrl (default executor providers) > opencode-acp → url (stream + non-stream) 1`] = `
-{
-  "nonStream": "opencode://acp/stdio",
-  "stream": "opencode://acp/stdio",
 }
 `;
 
@@ -2123,17 +1935,17 @@ exports[`GOLDEN buildUrl (default executor providers) > perplexity-agent → url
 }
 `;
 
+exports[`GOLDEN buildUrl (default executor providers) > perplexity-web → url (stream + non-stream) 1`] = `
+{
+  "nonStream": "https://www.perplexity.ai/rest/sse/perplexity_ask",
+  "stream": "https://www.perplexity.ai/rest/sse/perplexity_ask",
+}
+`;
+
 exports[`GOLDEN buildUrl (default executor providers) > poolside → url (stream + non-stream) 1`] = `
 {
   "nonStream": "https://inference.poolside.ai/v1/chat/completions",
   "stream": "https://inference.poolside.ai/v1/chat/completions",
-}
-`;
-
-exports[`GOLDEN buildUrl (default executor providers) > qoder-cn → url (stream + non-stream) 1`] = `
-{
-  "nonStream": "https://gateway.qoder.com.cn/algo/api/v2/service/pro/sse/agent_chat_generation",
-  "stream": "https://gateway.qoder.com.cn/algo/api/v2/service/pro/sse/agent_chat_generation",
 }
 `;
 
@@ -2207,16 +2019,51 @@ exports[`GOLDEN buildUrl (default executor providers) > xai → url (stream + no
 }
 `;
 
-exports[`GOLDEN buildUrl (default executor providers) > xiaomi-mimo → url (stream + non-stream) 1`] = `
-{
-  "nonStream": "https://api.xiaomimimo.com/v1/chat/completions",
-  "stream": "https://api.xiaomimimo.com/v1/chat/completions",
-}
-`;
-
 exports[`GOLDEN buildUrl (default executor providers) > zed → url (stream + non-stream) 1`] = `
 {
   "nonStream": "https://cloud.zed.dev/completions",
   "stream": "https://cloud.zed.dev/completions",
+}
+`;
+
+exports[`GOLDEN classification > records which providers bypass the generic URL/header contract 1`] = `
+{
+  "excluded": [
+    "antigravity (overrides)",
+    "azure (overrides)",
+    "bedrock (overrides)",
+    "bedrock-xai (overrides)",
+    "codex (overrides)",
+    "codex-acp (spawns CLI)",
+    "commandcode (overrides)",
+    "cursor-acp (spawns CLI)",
+    "devin-cli (overrides)",
+    "gemini-cli (overrides)",
+    "github (overrides)",
+    "grok-cli (overrides)",
+    "iflow (overrides)",
+    "kiro (overrides)",
+    "mimo-free (overrides)",
+    "mmf (overrides)",
+    "ollama-local (overrides)",
+    "omp-acp (spawns CLI)",
+    "opencode-acp (spawns CLI)",
+    "qoder (overrides)",
+    "qoder-cn (overrides)",
+    "vertex (overrides)",
+    "vertex-partner (overrides)",
+    "xiaomi-mimo (overrides)",
+    "xiaomi-tokenplan (overrides)",
+  ],
+  "kept": [
+    "codebuddy-cn",
+    "codebuddy-intl",
+    "grok-web",
+    "kimchi",
+    "minimax-code",
+    "minimax-code-global",
+    "perplexity-web",
+    "zed",
+  ],
 }
 `;
