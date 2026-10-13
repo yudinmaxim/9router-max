@@ -36,10 +36,14 @@
  *   - `session/request_permission` is a request, not a notification. The agent
  *     blocks the turn until the client answers; unanswered means the turn never
  *     returns. It is not gated on clientCapabilities — it arrives even when the
- *     client advertises nothing. Answered above, allow-option selected, logged.
+ *     client advertises nothing. Always answered; what we answer comes from the
+ *     permission policy (see acpPermissions.js), which the dashboard configures
+ *     per router and per provider.
  *   - `tool_call` / `tool_call_update` notifications are the agent narrating
  *     its *own* sandbox tools. Re-emitting them as OpenAI `tool_calls` would
- *     double-execute, so they are logged, not forwarded.
+ *     double-execute, so they are logged, not forwarded. Their `kind` is also
+ *     the only truthful record of what an action is: the permission request
+ *     itself reports `kind: "other"` for both reads and writes.
  *
  * Client-side `body.tools` therefore reach the agent the other way round: the
  * agent advertises `mcpCapabilities: {http: true, sse: true}`, so registering

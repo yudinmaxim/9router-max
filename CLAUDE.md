@@ -83,6 +83,14 @@ Two authoritative docs already exist — read them before working in these areas
 - One file per provider. `providers/registry/index.js` is an **auto-generated** static import list — regenerate it with `scripts/migrate-registry.mjs` / `injectDisplayToRegistry.mjs`, don't hand-edit.
 - Add a provider: copy `providers/REGISTRY_TEMPLATE.js`, add models to `config/providerModels.js`. Only add an executor for non-OpenAI-compatible upstreams.
 
+### ACP agent permissions (`open-sse/executors/lib/acpPermissions.js`)
+A CLI agent driven over ACP (`cursor-acp`, `opencode-acp`, `omp-acp`, `codex-acp`) asks the client before every tool — including reads — and **blocks the turn until answered**. 9router is headless, so it answers from policy instead of blanket-approving.
+- Policy is per **action** (`read, search, edit, move, delete, execute, fetch, other`) × **scope** (inside/outside the agent's working directory), values `always` / `once` / `deny`. Default is permissive; tighten it in the dashboard at `/dashboard/acp-permissions` or per provider on its page.
+- A request may override for one call via the `x-9router-acp-permissions` header or `metadata.acp_permissions` in the body — that is the "allow it for this session" path, since an ACP session is one request.
+- Two things that look wrong but are not: the permission request reports `kind: "other"` for **every** action, so the real kind is recovered from the preceding `tool_call` notification via `toolCallId`; and refusing is safe — the agent marks the tool failed and ends the turn, it does not retry elsewhere.
+- **Every** request must be answered, including ones with no recognisable option (cancel those). An unanswered request is a hang with no error, which is worse than a refusal.
+- Settings live in the `settings` blob (`acpPermissions`, `acpPermissionsByProvider`) and reach the engine as an `execute()` argument — `open-sse` never touches the database.
+
 ### Persistence — IMPORTANT (ARCHITECTURE.md is stale here)
 State is **no longer `db.json`**. It's a SQLite layer under `src/lib/db/` with an adapter fallback chain (`driver.js`): `bun:sqlite` → `better-sqlite3` (optional native dep) → `node:sqlite` (Node ≥22.5) → `sql.js` (pure-JS fallback, always works). `better-sqlite3` is deliberately in `optionalDependencies` so install never fails without build tools.
 - `src/lib/localDb.js` is a **backward-compat shim** re-exporting `src/lib/db/index.js`. New code should import from `@/lib/db/index.js`; per-entity logic lives in `src/lib/db/repos/*`. Schema/migrations in `src/lib/db/migrations/`.
