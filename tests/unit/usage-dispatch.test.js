@@ -16,7 +16,9 @@ const SUPPORTED = [
   "github", "gemini-cli", "antigravity", "claude", "codex", "kiro",
   "qoder", "qoder-cn", "iflow", "ollama", "glm", "glm-cn",
   "minimax", "minimax-cn", "vercel-ai-gateway", "grok-cli", "kimi",
-  "deepseek", "opencode-go", "zed", "commandcode",
+  // Cursor's plan quota is reported for the ACP provider: the api2 entry is
+  // gone, but the account and the Connect-RPC call it uses are the same.
+  "deepseek", "zed", "commandcode", "cursor-acp",
 ];
 
 describe("usage dispatch", () => {

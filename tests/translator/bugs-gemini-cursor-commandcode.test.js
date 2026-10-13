@@ -23,27 +23,6 @@ describe("OpenAI → Gemini", () => {
   });
 });
 
-describe("OpenAI → Cursor", () => {
-  // openai-to-cursor.js:12-24 — image content fully dropped (text only)
-  // KNOWN BUG
-  it.fails("image content is preserved", () => {
-    const out = O2C({
-      messages: [{ role: "user", content: [
-        { type: "text", text: "look" },
-        { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
-      ] }],
-    });
-    expect(JSON.stringify(out), "image dropped").toContain("AAAA");
-  });
-
-  // openai-to-cursor.js:179 — max_tokens hardcoded to 32000
-  // KNOWN BUG
-  it.fails("respects client max_tokens", () => {
-    const out = O2C({ max_tokens: 200, messages: [{ role: "user", content: "hi" }] });
-    expect(out.max_tokens).toBe(200);
-  });
-});
-
 describe("OpenAI → CommandCode", () => {
   // openai-to-commandcode.js:53-57 — safeParseJson returns {} on bad JSON (args silently lost)
   // KNOWN BUG

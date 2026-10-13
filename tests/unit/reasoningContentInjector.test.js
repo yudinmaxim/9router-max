@@ -11,7 +11,6 @@
 
 import { describe, it, expect } from "vitest";
 import { injectReasoningContent } from "../../open-sse/utils/reasoningContentInjector.js";
-import { OpenCodeExecutor } from "../../open-sse/executors/opencode.js";
 
 const assistantWithToolCall = {
   role: "assistant",
@@ -144,17 +143,5 @@ describe("injectReasoningContent — MiniMax thinking round-trip", () => {
     const assistant = out.messages.find((m) => m.role === "assistant");
     expect(typeof assistant.reasoning_content).toBe("string");
     expect(assistant.reasoning_content.length).toBeGreaterThan(0);
-  });
-});
-
-describe("OpenCodeExecutor — issue #1543 regression", () => {
-  it("runs the injector so deepseek-v4-flash-free round-trips reasoning_content", () => {
-    const executor = new OpenCodeExecutor();
-    const out = executor.transformRequest(
-      "deepseek-v4-flash-free",
-      bodyWith([{ role: "user", content: "hi" }, assistantWithToolCall]),
-    );
-    const assistant = out.messages.find((m) => m.role === "assistant");
-    expect(assistant.reasoning_content).toBeDefined();
   });
 });

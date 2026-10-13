@@ -39,7 +39,7 @@ async function modelsWithCombo(providerId, modelId, combos) {
 
 describe("/v1/models combo limits", () => {
   it.each([
-    ["ocg", "opencode-go", "mimo-v2.5"],
+    ["ca", "cursor-acp", "composer-2.5"],
     ["xmtp", "xiaomi-tokenplan", "mimo-v2.5"],
     ["ps", "poolside", "custom-model"],
     ["ds", "deepseek", "deepseek-chat"],
@@ -56,8 +56,8 @@ describe("/v1/models combo limits", () => {
   });
 
   it("carries provider-scoped limits through a nested combo", async () => {
-    const models = await modelsWithCombo("opencode-go", "mimo-v2.5", [
-      { name: "inner-combo", models: ["ocg/mimo-v2.5"] },
+    const models = await modelsWithCombo("cursor-acp", "composer-2.5", [
+      { name: "inner-combo", models: ["ca/composer-2.5"] },
       { name: "outer-combo", models: ["inner-combo"] },
     ]);
     const outer = models.find((model) => model.id === "outer-combo");

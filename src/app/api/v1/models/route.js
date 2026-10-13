@@ -15,7 +15,6 @@ import { resolveQoderModels, routableQoderModels } from "open-sse/services/qoder
 import { resolveCopilotModels } from "open-sse/services/copilotModels.js";
 import { resolveClinepassModels, resolveClineModels } from "open-sse/services/clinepassModels.js";
 import { resolveGrokCliModels } from "open-sse/services/grokCliModels.js";
-import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
@@ -132,13 +131,6 @@ const LIVE_MODEL_RESOLVERS = {
         });
       },
     });
-    return result?.models?.length ? { models: result.models } : null;
-  },
-  cursor: async (conn) => {
-    const result = await resolveCursorModels({
-      accessToken: conn.accessToken,
-      providerSpecificData: conn.providerSpecificData || {},
-    }, { log: console });
     return result?.models?.length ? { models: result.models } : null;
   },
   zed: async (conn) => {

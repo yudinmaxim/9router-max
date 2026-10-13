@@ -1,8 +1,34 @@
 import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
+import crypto from "node:crypto";
 import { HTTP_STATUS, FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { PROVIDER_MEDIA } from "../providers/index.js";
 import { getModelUpstreamId } from "../config/providerModels.js";
-import { generateSessionId } from "../executors/opencode-zen.js";
+
+// SystemOne expects the opencode session-id shape (`ses_` + 6 hex bytes + a
+// base62 tail). Inlined here: the opencode-zen executor that used to export it
+// is gone from this fork, and this header is the only remaining user.
+const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+function unstableRandom() {
+  const bytes = crypto.randomBytes(14);
+  let randomPart = "";
+  for (let i = 0; i < 14; i++) {
+    randomPart += BASE62_CHARS[bytes[i] % 62];
+  }
+  return randomPart;
+}
+
+function generateSessionId(timestamp = Date.now()) {
+  const current = BigInt(timestamp) * 0x1000n + 1n;
+  const value = ~current;
+  const time = Array.from({ length: 6 }, (_, index) =>
+    Number((value >> BigInt(40 - 8 * index)) & 0xffn)
+      .toString(16)
+      .padStart(2, "0")
+  ).join("");
+  return `ses_${time}${unstableRandom()}`;
+}
+
 
 /**
  * Core System One (Jev) handler — native decision payload pass-through.

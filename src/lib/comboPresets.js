@@ -10,7 +10,9 @@ import { CLI_TOOLS } from "@/shared/constants/cliTools";
 export const VALID_COMBO_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
 export const PRESET_SOURCES = new Set(["cursor", "claude"]);
 
-const CURSOR_ALIAS = "cu";
+// Cursor is ACP-only in this fork: the api2-RPC provider is gone, so presets
+// must point at the cursor-agent path instead of the removed `cu` alias.
+const CURSOR_ALIAS = "ca";
 const CLAUDE_ALIAS = "cc";
 
 /** Extra Claude Code aliases not listed in defaultModels. */

@@ -10,12 +10,12 @@ describe("combo presets", () => {
   it("rejects combo names with slashes or invalid chars", () => {
     expect(isValidComboPresetName("composer-2.5")).toBe(true);
     expect(isValidComboPresetName("claude-opus-5")).toBe(true);
-    expect(isValidComboPresetName("cu/composer-2.5")).toBe(false);
+    expect(isValidComboPresetName("ca/composer-2.5")).toBe(false);
     expect(isValidComboPresetName("bad name")).toBe(false);
     expect(isValidComboPresetName("")).toBe(false);
   });
 
-  it("Cursor live ids become unprefixed names seeded with cu/…", () => {
+  it("Cursor ids become unprefixed names seeded with ca/…", () => {
     const items = buildCursorPresetItems({
       liveModels: [
         { id: "composer-2.5", name: "Composer 2.5" },
@@ -25,15 +25,15 @@ describe("combo presets", () => {
     });
 
     expect(items).toEqual([
-      { name: "composer-2.5", models: ["cu/composer-2.5"] },
-      { name: "cursor-grok-4.6-high-fast", models: ["cu/cursor-grok-4.6-high-fast"] },
+      { name: "composer-2.5", models: ["ca/composer-2.5"] },
+      { name: "cursor-grok-4.6-high-fast", models: ["ca/cursor-grok-4.6-high-fast"] },
     ]);
   });
 
   it("Cursor falls back to static cu registry when live catalog is empty", () => {
     const items = buildCursorPresetItems({ liveModels: [] });
     expect(items.length).toBeGreaterThan(0);
-    expect(items.every((i) => i.models[0].startsWith("cu/"))).toBe(true);
+    expect(items.every((i) => i.models[0].startsWith("ca/"))).toBe(true);
     expect(items.some((i) => i.name === "default")).toBe(true);
     // No slash in combo name
     expect(items.every((i) => !i.name.includes("/"))).toBe(true);
@@ -83,8 +83,8 @@ describe("combo presets", () => {
     });
 
     expect(items).toEqual([
-      { name: "composer-2.5", models: ["cu/composer-2.5"], exists: true },
-      { name: "gpt-5.3-codex", models: ["cu/gpt-5.3-codex"], exists: false },
+      { name: "composer-2.5", models: ["ca/composer-2.5"], exists: true },
+      { name: "gpt-5.3-codex", models: ["ca/gpt-5.3-codex"], exists: false },
     ]);
   });
 

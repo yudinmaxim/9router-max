@@ -24,7 +24,6 @@ tests/unit/combo-autoswitch.test.js :: detectRequiredCapabilities web_search too
 tests/unit/combo-autoswitch.test.js :: reorderByCapabilities keeps order when no model matches
 tests/unit/combo-caps-resolver.test.js :: aggregateComboCapabilities: resolveCaps override falls back to the pattern default without a resolver
 tests/unit/commandcode-to-openai.test.js :: commandcode-to-openai — error event stringifies object errors so client sees readable message
-tests/unit/cursor-models.test.js :: Cursor live model catalog fetches the account-specific catalog and caches it
 tests/unit/db-benchmark.test.js :: <suite failed to collect>
 tests/unit/db-concurrent.test.js :: DB Concurrency — atomic safety 100 parallel saveRequestUsage → no count loss
 tests/unit/db-concurrent.test.js :: DB Concurrency — atomic safety daily summary aggregates correctly under parallel writes
@@ -73,14 +72,6 @@ tests/unit/openai-to-kiro.test.js :: openaiToKiroRequest thinking budget normali
 tests/unit/openai-to-kiro.test.js :: openaiToKiroRequest thinking budget normalizes unsupported Kiro intensity suffix for glm-5-thinking-agentic(medium)
 tests/unit/openai-to-kiro.test.js :: openaiToKiroRequest thinking budget uses Claude thinking.budget_tokens as max_thinking_length
 tests/unit/openai-to-kiro.test.js :: openaiToKiroRequest thinking budget uses the default budget for synthetic -thinking models with no explicit config
-tests/unit/opencode-free-tool-choice.test.js :: opencode Free 1.3 tool_choice auto-only demote Chat function named sang auto (plain và max)
-tests/unit/opencode-free-tool-choice.test.js :: opencode Free 1.3 tool_choice auto-only demote Claude tool named sang auto (plain và max)
-tests/unit/opencode-free-tool-choice.test.js :: opencode Free 1.3 tool_choice auto-only demote Responses named sang auto (plain và max)
-tests/unit/opencode-free-tool-choice.test.js :: opencode Free 1.3 tool_choice auto-only demote none sang auto (plain và max)
-tests/unit/opencode-free-tool-choice.test.js :: opencode Free 1.3 tool_choice auto-only demote required sang auto (plain và max)
-tests/unit/opencode-free-tool-choice.test.js :: opencode Free 1.3 tool_choice auto-only giữ auto và absent; tools/input nguyên vẹn
-tests/unit/opencode-free-tool-choice.test.js :: opencode Free 1.3 tool_choice auto-only wire: execute gửi choice auto tới /zen/v1/responses
-tests/unit/opencode-muse-spark-thinking.test.js :: OpenCode Free Muse Spark thinking strips prior-turn reasoning items carrying encrypted_content from input
 tests/unit/request-details-tab.test.js :: getDistinctProviders — providers route (no full-row parse) returns unique provider list without parsing data blobs
 tests/unit/request-details-tab.test.js :: request details — tab crash-risk cases oversized field → stored truncated + reparseable (no circular)
 tests/unit/security-audit.test.js :: AUDIT-002: API key masking byApiKey object keys should use masked key, not raw key

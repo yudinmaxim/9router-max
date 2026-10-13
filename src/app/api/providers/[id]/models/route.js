@@ -10,7 +10,6 @@ import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
 import { resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { resolveGrokCliModels } from "open-sse/services/grokCliModels.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
-import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { resolveClineModels, resolveClinepassModels } from "open-sse/services/clinepassModels.js";
 import codexProvider from "open-sse/providers/registry/codex.js";
@@ -328,19 +327,6 @@ const PROVIDER_MODELS_CONFIG = {
         warning: "Kimchi returned no live models; falling back to static catalog.",
       };
     }
-  },
-  cursor: {
-    customResolver: async (connection) => {
-      const result = await resolveCursorModels({
-        accessToken: connection.accessToken,
-        providerSpecificData: connection.providerSpecificData || {},
-      }, { forceRefresh: true, log: console });
-      if (result?.models?.length) return { models: result.models };
-      return {
-        models: getStaticProviderModels("cursor"),
-        warning: "Cursor returned no live models; falling back to static catalog.",
-      };
-    },
   },
   // Zed has no static catalog by design (live /models only) — same cursor
   // direct pattern: resolve with the connection's own credentials (never

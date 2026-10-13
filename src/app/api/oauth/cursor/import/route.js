@@ -41,7 +41,7 @@ export async function POST(request) {
 
     // Save to database
     const connection = await createProviderConnection({
-      provider: "cursor",
+      provider: "cursor-acp",
       authType: "oauth",
       accessToken: tokenData.accessToken,
       refreshToken: null, // Cursor doesn't have public refresh endpoint
@@ -79,7 +79,7 @@ export async function GET() {
   const instructions = cursorService.getTokenStorageInstructions();
 
   return NextResponse.json({
-    provider: "cursor",
+    provider: "cursor-acp",
     method: "import_token",
     instructions,
     requiredFields: [

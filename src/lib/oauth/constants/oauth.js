@@ -81,7 +81,22 @@ export function assertValidAwsRegion(region) {
 // Cursor OAuth Configuration (Import Token from Cursor IDE)
 // tokenStoragePaths: user-reference only, not stored in registry
 export const CURSOR_CONFIG = {
-  ...PROVIDER_OAUTH["cursor"],
+  // No longer spread from PROVIDER_OAUTH: the `cursor` api2 entry was removed
+  // from this fork, but the Cursor account still carries the plan quota that
+  // cursor-acp reports, so the token import stays. Values inlined from the
+  // registry entry that used to supply them.
+  apiEndpoint: "https://api2.cursor.sh",
+  chatEndpoint: "/aiserver.v1.ChatService/StreamUnifiedChatWithTools",
+  modelsEndpoint: "/agent.v1.AgentService/GetUsableModels",
+  api3Endpoint: "https://api3.cursor.sh",
+  agentEndpoint: "https://agent.api5.cursor.sh",
+  agentNonPrivacyEndpoint: "https://agentn.api5.cursor.sh",
+  clientVersion: "3.12.17",
+  clientType: "ide",
+  dbKeys: {
+    accessToken: "cursorAuth/accessToken",
+    machineId: "storage.serviceMachineId",
+  },
   tokenStoragePaths: {
     linux: "~/.config/Cursor/User/globalStorage/state.vscdb",
     macos: "/Users/<user>/Library/Application Support/Cursor/User/globalStorage/state.vscdb",
@@ -239,7 +254,8 @@ export const PROVIDERS = {
   OPENAI: "openai",
   GITHUB: "github",
   KIRO: "kiro",
-  CURSOR: "cursor",
+  // The api2 provider is gone; the token import now lands on cursor-acp.
+  CURSOR: "cursor-acp",
   KIMI: "kimi",
   KIMI_CODING: "kimi",
   KILOCODE: "kilocode",

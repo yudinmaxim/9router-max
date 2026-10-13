@@ -24,7 +24,12 @@ import { U } from "./shared.js";
 // by 100 before it reaches the dashboard's quota bars.
 const CENTS = 100;
 
-const USAGE_URL = U("cursor").url;
+// Inlined, not read from the provider registry: the `cursor` api2 entry is
+// gone from this fork, but `cursor-acp` still reads its quota through the same
+// Connect-RPC call. Connect-RPC over HTTP/2 with the JSON codec — the
+// `application/connect+proto` streaming encoding is rejected by this unary
+// method.
+const USAGE_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
 
 function num(value, fallback = 0) {
   if (typeof value === "number" && Number.isFinite(value)) return value;

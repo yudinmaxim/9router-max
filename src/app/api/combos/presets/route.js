@@ -1,31 +1,8 @@
 import { NextResponse } from "next/server";
-import { getCombos, createCombo, getProviderConnections } from "@/lib/localDb";
+import { getCombos, createCombo } from "@/lib/localDb";
 import { buildPresetItems, PRESET_SOURCES } from "@/lib/comboPresets";
-import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 
 export const dynamic = "force-dynamic";
-
-/**
- * Resolve live Cursor catalog from the first active cursor connection, if any.
- * @returns {Promise<Array<{id: string, name?: string}>|null>}
- */
-async function fetchCursorLiveModels() {
-  try {
-    const connections = await getProviderConnections();
-    const conn = (connections || []).find(
-      (c) => c.provider === "cursor" && c.isActive !== false
-    );
-    if (!conn) return null;
-    const result = await resolveCursorModels({
-      accessToken: conn.accessToken,
-      providerSpecificData: conn.providerSpecificData || {},
-    }, { log: console });
-    return result?.models?.length ? result.models : null;
-  } catch (error) {
-    console.log("combo presets: cursor live catalog failed", error?.message || error);
-    return null;
-  }
-}
 
 /**
  * @param {string} source
@@ -34,11 +11,7 @@ async function fetchCursorLiveModels() {
 async function resolvePresetItems(source) {
   const combos = await getCombos();
   const existingNames = (combos || []).map((c) => c.name);
-  const liveModels = source === "cursor" ? await fetchCursorLiveModels() : null;
-  return buildPresetItems(source, {
-    liveModels: liveModels || undefined,
-    existingNames,
-  });
+  return buildPresetItems(source, { existingNames });
 }
 
 function parseSource(value) {
