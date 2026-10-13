@@ -16,10 +16,13 @@ const SPECIAL_CRED = {
 
 // Provider cần executor riêng (buildUrl/buildHeaders không nằm ở DefaultExecutor) → bỏ qua ở golden này.
 // Chúng được lock riêng ở 11-provider edge tests / unit test chuyên biệt.
+// Providers with a dedicated executor in executors/index.js: their upstream
+// URL and headers are built there, so snapshotting DefaultExecutor for them
+// records a code path they never take.
 const SPECIALIZED = new Set([
   "antigravity", "azure", "gemini-cli", "github", "iflow", "qoder", "kiro",
-  "codex", "cursor", "vertex", "vertex-partner", "opencode",
-  "opencode-go", "grok-web", "perplexity-web", "ollama-local", "commandcode",
+  "codex", "vertex", "vertex-partner", "devin-cli",
+  "grok-web", "perplexity-web", "ollama-local", "commandcode",
   "xiaomi-tokenplan", "mimo-free",
 ]);
 
