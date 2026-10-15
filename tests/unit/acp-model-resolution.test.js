@@ -17,6 +17,7 @@ import { describe, it, expect } from "vitest";
 import {
   collectModelCatalog,
   resolveAgentModelId,
+  usableAgentModels,
   isSelfRouted,
 } from "open-sse/executors/lib/acpBase.js";
 
@@ -116,6 +117,25 @@ describe("resolveAgentModelId", () => {
     // the agent; returning the combo would call back into this gateway.
     expect(resolved).toBe("anything");
     expect(isSelfRouted(resolved)).toBe(false);
+  });
+
+  it("knows when a catalog has nothing safe to select", () => {
+    // The whole catalog pointing at this gateway is the dangerous shape: a bare
+    // request like `space-bunny-free` resolves to something that does not look
+    // self-routed, so the pick-level check cannot see the loop coming.
+    const onlySelfRouted = ["nine-router/oacp/space-bunny-free", "nine-router/ca/composer-2.5"];
+    expect(usableAgentModels(onlySelfRouted)).toEqual([]);
+    expect(isSelfRouted(resolveAgentModelId("space-bunny-free", onlySelfRouted, ""))).toBe(false);
+
+    const mixed = [...onlySelfRouted, "opencode/big-pickle"];
+    expect(usableAgentModels(mixed)).toEqual(["opencode/big-pickle"]);
+  });
+
+  it("treats an empty catalog as no opinion, not as a refusal", () => {
+    expect(usableAgentModels([])).toEqual([]);
+    expect(usableAgentModels(undefined)).toEqual([]);
+    // An older CLI with no catalog still gets its request forwarded.
+    expect(resolveAgentModelId("anything", [], "")).toBe("anything");
   });
 
   it("keeps cursor's bracket-suffixed ids and explicit default", () => {

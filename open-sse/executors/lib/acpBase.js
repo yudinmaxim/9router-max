@@ -253,10 +253,18 @@ export function currentAgentModel(sessionResult) {
  * With no catalog at all (older CLI) the request is forwarded untouched. An
  * unmatched id degrades to the agent's current model rather than erroring.
  */
+/**
+ * Catalog entries that are safe to select: everything except ids that point
+ * back at this gateway.
+ */
+export function usableAgentModels(catalog) {
+  const ids = Array.isArray(catalog) ? catalog : [];
+  return ids.filter((id) => !isSelfRouted(id));
+}
+
 export function resolveAgentModelId(requested, catalog, current = "") {
   const want = String(requested || "").trim();
-  const ids = Array.isArray(catalog) ? catalog : [];
-  const usable = ids.filter((id) => !isSelfRouted(id));
+  const usable = usableAgentModels(catalog);
 
   if (!want) return usable[0] || current || "";
   if (!usable.length) return want;
@@ -613,12 +621,25 @@ export class AcpAgentExecutor extends BaseExecutor {
               resolvedModelId = resolveAgentModelId(model, catalog, current);
               log?.debug?.(tag, `session=${sessionId} current=${current} requested=${model} → ${resolvedModelId}`);
 
+              const refuseSelfRoute = () => finish(
+                `ACP: refusing to route back into 9router. The ${label} catalog only offers self-referential models; point the agent at a real upstream, or exclude this provider.`,
+                "stop",
+                "self_routed"
+              );
+
               if (resolvedModelId && isSelfRouted(resolvedModelId)) {
-                finish(
-                  `ACP: refusing to route back into 9router. The ${label} catalog only offers self-referential models; point the agent at a real upstream, or exclude this provider.`,
-                  "stop",
-                  "self_routed"
-                );
+                refuseSelfRoute();
+                return;
+              }
+
+              // The check above only inspects the id we picked. A bare request
+              // such as `space-bunny-free` looks harmless while every model the
+              // agent actually has is self-routed — the agent would fuzzy-match
+              // it back to its 9router entry and call this gateway again, one
+              // process per hop. Refuse on the catalog itself, before any model
+              // is chosen, so the loop cannot start.
+              if (catalog.length && !usableAgentModels(catalog).length) {
+                refuseSelfRoute();
                 return;
               }
 
