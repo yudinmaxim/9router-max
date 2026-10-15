@@ -29,6 +29,13 @@ export {
   createProxyPool, updateProxyPool, deleteProxyPool,
 } from "./repos/proxyPoolsRepo.js";
 
+// MCP servers shared with every ACP agent
+export {
+  getMcpServers, getMcpServerById,
+  createMcpServer, updateMcpServer, deleteMcpServer,
+  setMcpServerTestStatus, resolveMcpServerForProxy,
+} from "./repos/mcpServersRepo.js";
+
 // API keys
 export {
   getApiKeys, getApiKeyById, getApiKeyByKey, createApiKey, updateApiKey, deleteApiKey, validateApiKey,

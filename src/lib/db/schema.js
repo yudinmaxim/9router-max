@@ -3,7 +3,7 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -73,6 +73,23 @@ export const TABLES = {
     indexes: [
       "CREATE INDEX IF NOT EXISTS idx_pp_active ON proxyPools(isActive)",
       "CREATE INDEX IF NOT EXISTS idx_pp_status ON proxyPools(testStatus)",
+    ],
+  },
+
+  // MCP servers the router hands to every ACP agent in `session/new`. The
+  // credentials live inside `data` sealed by @/lib/secretBox, never in clear.
+  mcpServers: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      isActive: "INTEGER DEFAULT 1",
+      testStatus: "TEXT",
+      data: "TEXT NOT NULL",
+      createdAt: "TEXT NOT NULL",
+      updatedAt: "TEXT NOT NULL",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_ms_active ON mcpServers(isActive)",
+      "CREATE INDEX IF NOT EXISTS idx_ms_status ON mcpServers(testStatus)",
     ],
   },
   apiKeys: {
