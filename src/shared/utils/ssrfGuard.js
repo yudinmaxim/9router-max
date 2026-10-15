@@ -199,8 +199,15 @@ export async function assertPublicUrlResolved(rawUrl) {
 // validated public URL can't 30x its way to an internal target. Bounded to
 // maxRedirects hops (fetch's own default following behavior has no bound
 // relevant here since we never let it auto-follow).
-export async function fetchPublic(url, init = {}, { maxRedirects = 5 } = {}) {
-  await assertPublicUrlResolved(url);
+//
+// `allowLocal` lifts the guard entirely. It exists for the one legitimate case:
+// a caller that has already established the target is on this machine — a
+// self-hosted MCP server inside 9router, or a request from localhost. It is
+// opt-in and defaults to off, so adding it here cannot weaken any existing
+// caller: the old ad-hoc shape was `isLocalRequest(req) ? fetch : fetchPublic`,
+// which is exactly this flag decided by the caller.
+export async function fetchPublic(url, init = {}, { maxRedirects = 5, allowLocal = false } = {}) {
+  if (!allowLocal) await assertPublicUrlResolved(url);
   let currentUrl = url;
   for (let hop = 0; ; hop++) {
     const res = await fetch(currentUrl, { ...init, redirect: "manual" });
@@ -209,7 +216,7 @@ export async function fetchPublic(url, init = {}, { maxRedirects = 5 } = {}) {
     if (!location) return res;
     if (hop >= maxRedirects) throw new Error("Blocked URL: too many redirects");
     const nextUrl = new URL(location, currentUrl).toString();
-    await assertPublicUrlResolved(nextUrl);
+    if (!allowLocal) await assertPublicUrlResolved(nextUrl);
     currentUrl = nextUrl;
   }
 }
