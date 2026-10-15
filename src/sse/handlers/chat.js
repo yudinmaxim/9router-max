@@ -27,6 +27,7 @@ import { updateProviderCredentials, checkAndRefreshToken } from "../services/tok
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
+import { buildMcpProxyTargets } from "@/lib/mcp/proxyTargets.js";
 
 /**
  * Handle chat completion request
@@ -325,6 +326,11 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         chatSettings.acpPermissions,
         (chatSettings.acpPermissionsByProvider || {})[provider]
       ),
+      // MCP servers from the router-side registry, as ACP mcpServers entries
+      // pointing at our own proxy. Empty array unless the operator registered
+      // some, and ignored by non-ACP executors. The engine never reads the
+      // database itself, which is why this arrives as an argument.
+      mcpProxyTargets: await buildMcpProxyTargets(),
       // Detect source format by endpoint + body
       sourceFormatOverride: request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null,
       onCredentialsRefreshed: async (newCreds) => {

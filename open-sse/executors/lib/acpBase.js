@@ -387,7 +387,7 @@ export class AcpAgentExecutor extends BaseExecutor {
     return false;
   }
 
-  async execute({ model, body, credentials, acpPermissions, signal, log }) {
+  async execute({ model, body, credentials, acpPermissions, mcpProxyTargets, signal, log }) {
     const { exe, envVar, args, tag, label, installHint, errorType, versionsDir, extraDirs } = this.acp;
     const b = body ?? {};
     const messages = extractMessages(b);
@@ -705,7 +705,14 @@ export class AcpAgentExecutor extends BaseExecutor {
               // the agent runs its own tools either way.
               sendRpc("session/new", {
                 cwd: workspaceCwd,
-                mcpServers: clientToolsMcp ? [clientToolsMcp] : [],
+                // The client-tool bridge first: agents may rename a bridged tool,
+                // and that mapping is already proven in live runs. Router-level
+                // MCP servers follow, addressed at the proxy rather than at their
+                // upstream so no credential reaches the agent process.
+                mcpServers: [
+                  ...(clientToolsMcp ? [clientToolsMcp] : []),
+                  ...(Array.isArray(mcpProxyTargets) ? mcpProxyTargets : []),
+                ],
               });
               continue;
             }
