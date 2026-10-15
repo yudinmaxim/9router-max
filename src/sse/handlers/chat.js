@@ -176,6 +176,17 @@ export async function handleChat(request, clientRawRequest = null) {
 async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, requestedModel = null) {
   const modelInfo = await getModelInfo(modelStr);
 
+  // The prefix matched neither a registered provider nor a provider node.
+  // Checked before the combo branch: a combo name has no provider either, and
+  // letting it fall through would report "not a combo" for a dead provider.
+  if (modelInfo.unknownProvider) {
+    log.warn("CHAT", `Unknown provider prefix: ${modelInfo.unknownProvider} (model=${modelStr})`);
+    return errorResponse(
+      HTTP_STATUS.NOT_FOUND,
+      `Unknown provider: ${modelInfo.unknownProvider}. It is not registered in this router and matches no provider node — if it was removed, its model ids stopped resolving.`
+    );
+  }
+
   // If provider is null, this might be a combo name - check and handle
   if (!modelInfo.provider) {
     const comboModels = await getComboModels(modelStr);
