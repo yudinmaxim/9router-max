@@ -2,6 +2,7 @@ import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS, getModelKind } from "@/shared/co
 import {
   ALIAS_TO_ID,
   AI_PROVIDERS,
+  FREE_PROVIDERS,
   getProviderAlias,
   isAnthropicCompatibleProvider,
   isOpenAICompatibleProvider,
@@ -356,6 +357,28 @@ export async function buildModelsList(kindFilter, options = {}) {
     if (!activeConnectionByProvider.has(conn.provider)) {
       activeConnectionByProvider.set(conn.provider, conn);
     }
+  }
+
+  // noAuth providers (the ACP agents, devin-cli) are served by the synthetic
+  // connection that sse/services/auth.js injects, so they work at request time
+  // without a row in providerConnections. They were absent from this list,
+  // which meant clients could not discover them: opencode, omp and Zed had to
+  // have their model ids written out by hand, and a stale hand-written id fails
+  // as "model not found" rather than "provider has no models".
+  //
+  // A real connection always wins — the synthetic entry only fills a gap, so a
+  // configured prefix or an explicit enabledModels list still applies.
+  for (const [providerId, entry] of Object.entries(FREE_PROVIDERS)) {
+    if (!entry?.noAuth) continue;
+    if (activeConnectionByProvider.has(providerId)) continue;
+    activeConnectionByProvider.set(providerId, {
+      id: `synthetic:${providerId}`,
+      provider: providerId,
+      connectionName: "Public",
+      isActive: true,
+      accessToken: "public",
+      providerSpecificData: {},
+    });
   }
 
   const models = [];
