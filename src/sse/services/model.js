@@ -2,6 +2,7 @@
 import { getModelAliases, getComboByName, getProviderNodes } from "@/lib/localDb";
 import { parseModel as parseModelCore, resolveModelAliasFromMap, getModelInfoCore } from "open-sse/services/model.js";
 import REGISTRY from "open-sse/providers/registry/index.js";
+import { KNOWN_PROVIDER_IDS } from "open-sse/providers/known.js";
 
 // Local provider alias overrides (HMR-friendly, applied on top of open-sse map)
 const LOCAL_PROVIDER_ALIASES = {
@@ -10,13 +11,7 @@ const LOCAL_PROVIDER_ALIASES = {
 };
 
 const RESERVED_PROVIDER_PREFIXES = new Set(Object.keys(LOCAL_PROVIDER_ALIASES));
-// Provider ids match case-insensitively everywhere else in the router (key
-// allow-lists are stored and compared lowercased), so this set is lowercased
-// too. A case-sensitive check here silently dropped `OpenAI/gpt-5.5` from a
-// restricted key's allow-list, which reads as "the model vanished".
-const KNOWN_PROVIDER_IDS = new Set();
 for (const entry of REGISTRY) {
-  KNOWN_PROVIDER_IDS.add(String(entry.id).toLowerCase());
   RESERVED_PROVIDER_PREFIXES.add(entry.id);
   if (entry.alias) RESERVED_PROVIDER_PREFIXES.add(entry.alias);
   for (const alias of entry.aliases || []) RESERVED_PROVIDER_PREFIXES.add(alias);

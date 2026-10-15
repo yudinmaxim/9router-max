@@ -1,5 +1,6 @@
 import { getProviderConnections, updateProviderConnection } from "@/lib/localDb.js";
 import { getExecutor } from "open-sse/index.js";
+import { UnknownProviderError } from "open-sse/providers/known.js";
 
 async function persistRefreshedCredentials(connection, newCredentials) {
   const updateData = {};
@@ -89,6 +90,6 @@ export async function POST(request) {
     });
   } catch (error) {
     console.error("[Translator] Send error:", error);
-    return Response.json({ success: false, error: error.message }, { status: 500 });
+    return Response.json({ success: false, error: error.message }, { status: error instanceof UnknownProviderError ? 400 : 500 });
   }
 }

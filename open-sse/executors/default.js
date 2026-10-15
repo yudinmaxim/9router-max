@@ -9,6 +9,7 @@ import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { stripUnsupportedParams } from "../translator/concerns/paramSupport.js";
 import { extractClaudeSessionIdFromUserId } from "../utils/claudeCloaking.js";
+import { assertKnownProvider, isCompatibleNodeProvider } from "../providers/known.js";
 
 // Auth header descriptors — derived from registry transport.auth, fallback to hardcoded defaults.
 const BEARER = { combined: true, header: "Authorization", scheme: "bearer" };
@@ -77,7 +78,15 @@ const REFRESH_GRANTS = Object.fromEntries(
 
 export class DefaultExecutor extends BaseExecutor {
   constructor(provider) {
-    super(provider, PROVIDERS[provider] || PROVIDERS.openai);
+    // Same reason as services/provider.js: an unknown id used to inherit
+    // PROVIDERS.openai and be dispatched to api.openai.com under its own name.
+    // Entry points that bypass the request-level check (translator routes, the
+    // usage refresh, image/embedding cores) hit this constructor directly.
+    assertKnownProvider(provider);
+    // Provider nodes have no registry entry by design — their URL comes from
+    // the node's own baseUrl, and OpenAI's transport has always been their
+    // default config. Only they are allowed to reach a substitute provider.
+    super(provider, PROVIDERS[provider] || (isCompatibleNodeProvider(provider) ? PROVIDERS.openai : undefined));
   }
 
   transformRequest(model, body) {

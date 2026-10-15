@@ -287,6 +287,37 @@ SKIP_BUILD=1 ~/.local/bin/9router-fork-sync
 
 ---
 
+## Тихий уход на OpenAI закрыт
+
+Раньше неизвестный провайдер не отклонялся, а **молча наследовал OpenAI**:
+`PROVIDERS[provider] || PROVIDERS.openai`. Запрос уходил на `api.openai.com`
+под чужим именем и возвращал `401 Incorrect API key provided: undefined` —
+указание на ключи вместо настоящей причины (а `opencode/space-bunny-free`
+ещё и планировал ретрай против заведомо недостижимого адреса).
+
+Две точки в движке (`executors/default.js`, `services/provider.js`) плюс
+проверка уровня запроса из `90e220b1`. Теперь:
+
+- `open-sse/providers/known.js` — единственный источник истины
+  (`KNOWN_PROVIDER_IDS` — id, `KNOWN_PROVIDER_KEYS` — id + алиасы,
+  `assertKnownProvider`, `UnknownProviderError`). `src/sse/services/model.js`
+  импортирует оттуда, а не собирает свой Set — иначе тот же дрейф, что был
+  в golden-тесте.
+- `isCompatibleNodeProvider` — узлы `openai-compatible-*` /
+  `anthropic-compatible-*` в реестре **нет** и это by design: URL строит
+  `BaseExecutor` из `baseUrl` узла. Раньше им доставался `PROVIDERS.openai`,
+  поэтому фолбэк у них сохранён — иначе падают все кастомные ноды. Это
+  отловил гейт: 7 тестов `claude-header-forwarding.test.js`.
+- Маршруты переводчика отдают 400 вместо 500 на неизвестный провайдер.
+
+Проверено вживую: `opencode/…` и `выдуманный/…` → 404 с внятным текстом,
+`oacp/space-bunny-free` → `GUARDOK`, 13 юнит-тестов в
+`unit/unknown-provider-engine-guard.test.js`.
+
+**Грабли:** `cmd; echo $?` после пайпа показывает код последней команды
+пайпа, а не гейта. Один прогон показал «exit=0» при восьми регрессиях —
+реальный код выхода брать через `;` без пайпа.
+
 ## Что стоит помнить про ACP
 
 - Три агента — один протокол, `protocolVersion: 1`.

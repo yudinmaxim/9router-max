@@ -1,12 +1,15 @@
 import { PROVIDERS } from "../config/providers.js";
 import { OPENAI_COMPAT_BASE, ANTHROPIC_COMPAT_BASE } from "../providers/shared.js";
+import {
+  OPENAI_COMPATIBLE_PREFIX,
+  ANTHROPIC_COMPATIBLE_PREFIX,
+  assertKnownProvider,
+} from "../providers/known.js";
 
-const OPENAI_COMPATIBLE_PREFIX = "openai-compatible-";
 const OPENAI_COMPATIBLE_DEFAULTS = {
   baseUrl: OPENAI_COMPAT_BASE,
 };
 
-const ANTHROPIC_COMPATIBLE_PREFIX = "anthropic-compatible-";
 const ANTHROPIC_COMPATIBLE_DEFAULTS = {
   baseUrl: ANTHROPIC_COMPAT_BASE,
 };
@@ -127,7 +130,11 @@ function getProviderConfig(provider, credentials = null) {
       baseUrl: ANTHROPIC_COMPATIBLE_DEFAULTS.baseUrl,
     };
   }
-  return PROVIDERS[provider] || PROVIDERS.openai;
+  // No fallback. `PROVIDERS[provider] || PROVIDERS.openai` sent every unknown
+  // id to api.openai.com under the caller's own name, so the failure surfaced
+  // as a 401 about a missing key rather than as an unknown provider.
+  assertKnownProvider(provider);
+  return PROVIDERS[provider];
 }
 
 // Get target format for provider

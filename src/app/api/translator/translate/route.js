@@ -5,6 +5,7 @@ import { FORMATS } from "open-sse/translator/formats.js";
 import { getModelInfo } from "@/sse/services/model.js";
 import { getProviderConnections } from "@/lib/localDb.js";
 import { getExecutor } from "open-sse/executors/index.js";
+import { UnknownProviderError } from "open-sse/providers/known.js";
 
 export async function POST(request) {
   try {
@@ -85,6 +86,6 @@ export async function POST(request) {
     }
   } catch (error) {
     console.error("Error in translator:", error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: error.message }, { status: error instanceof UnknownProviderError ? 400 : 500 });
   }
 }
