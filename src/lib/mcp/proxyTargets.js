@@ -40,6 +40,11 @@ export async function buildMcpProxyTargets() {
     type: "http",
     name: server.name || server.id,
     url: `${base}/api/mcp-proxy/${server.id}`,
-    headers: { [MCP_PROXY_KEY_HEADER]: key },
+    // `headers` is a sequence of {name, value}, not an object — verified live.
+    // cursor-agent rejects the whole session with -32603 invalid_union on an
+    // object, which kills every MCP server including ones that were fine, and
+    // its error enumerates the rejected variants before the accepted one, so
+    // the cause is not visible unless you read all three.
+    headers: [{ name: MCP_PROXY_KEY_HEADER, value: key }],
   }));
 }

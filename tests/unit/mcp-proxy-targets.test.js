@@ -47,8 +47,15 @@ function validateServers(servers) {
     seen.add(s.name);
     if (s.type === "http" || s.type === "sse") {
       if (typeof s.url !== "string" || !/^https?:\/\//.test(s.url)) return `entry ${i} needs an http(s) url`;
-      if (s.headers !== undefined && (Array.isArray(s.headers) || typeof s.headers !== "object")) {
-        return `entry ${i} headers must be an object`;
+      // Live-verified: cursor-agent wants a sequence of {name, value}. An
+      // object is rejected as invalid_union and kills the whole session.
+      if (s.headers !== undefined) {
+        if (!Array.isArray(s.headers)) return `entry ${i} headers must be an array`;
+        for (const h of s.headers) {
+          if (!h || typeof h.name !== "string" || typeof h.value !== "string") {
+            return `entry ${i} header must be {name, value}`;
+          }
+        }
       }
     } else if (typeof s.command === "string") {
       // stdio: the live cursor-agent accepts it without an explicit `type`,
@@ -148,7 +155,7 @@ describe("buildMcpProxyTargets", () => {
   it("carries the proxy key and never the upstream credential", async () => {
     await repo.createMcpServer({ name: "Jira", url: "https://jira.example/mcp", authType: "bearer", authToken: "upstream-secret" });
     const [target] = await buildMcpProxyTargets();
-    expect(target.headers[MCP_PROXY_KEY_HEADER]).toBe(getMcpProxyKey());
+    expect(target.headers).toEqual([{ name: MCP_PROXY_KEY_HEADER, value: getMcpProxyKey() }]);
     expect(JSON.stringify(target)).not.toContain("upstream-secret");
   });
 
@@ -161,6 +168,14 @@ describe("buildMcpProxyTargets", () => {
   it("always speaks http to the proxy, even for a legacy sse upstream", async () => {
     await repo.createMcpServer({ name: "Legacy", url: "https://c.example/mcp", transport: "sse" });
     expect((await buildMcpProxyTargets())[0].type).toBe("http");
+  });
+
+  it("shapes headers as {name, value} — an object is rejected live", async () => {
+    await repo.createMcpServer({ name: "Jira", url: "https://a.example/mcp", authType: "bearer", authToken: "t" });
+    const [target] = await buildMcpProxyTargets();
+    expect(Array.isArray(target.headers)).toBe(true);
+    expect(target.headers[0].name).toBe(MCP_PROXY_KEY_HEADER);
+    expect(typeof target.headers[0].value).toBe("string");
   });
 
   it("produces entries the agent's mcpServers union accepts", async () => {
@@ -182,7 +197,7 @@ vi.mock("open-sse/executors/index.js", () => ({
 
 const { handleChatCore } = await import("open-sse/handlers/chatCore.js");
 
-const TARGETS = [{ type: "http", name: "Jira", url: "http://127.0.0.1:21999/api/mcp-proxy/x", headers: {} }];
+const TARGETS = [{ type: "http", name: "Jira", url: "http://127.0.0.1:21999/api/mcp-proxy/x", headers: [] }];
 
 function stubExecutorResponse() {
   executeMock.mockResolvedValue({
@@ -270,7 +285,7 @@ describe("acpBase hands the targets to the agent", () => {
       model: "space-bunny-free",
       body: { messages: [{ role: "user", content: "hi" }], tools: [READ] },
       credentials: {},
-      mcpProxyTargets: [{ type: "http", name: "Jira", url: "http://127.0.0.1:21999/api/mcp-proxy/x", headers: {} }],
+      mcpProxyTargets: [{ type: "http", name: "Jira", url: "http://127.0.0.1:21999/api/mcp-proxy/x", headers: [] }],
       log: { info() {}, debug() {} },
     });
     const reader = response.body.getReader();
