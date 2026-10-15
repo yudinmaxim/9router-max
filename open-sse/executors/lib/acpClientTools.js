@@ -25,9 +25,11 @@ import path from "node:path";
 export const CLIENT_TOOLS_SERVER_NAME = "clientTools";
 
 const CLIENT_TOOLS_MCP_SCRIPT = `
+import fs from "node:fs";
 import readline from "node:readline";
 const TOOLS = JSON.parse(process.env.ACP_CLIENT_TOOLS || "[]");
 const RESULTS = JSON.parse(process.env.ACP_CLIENT_TOOL_RESULTS || "{}");
+const SINK = process.env.ACP_CLIENT_TOOLS_SINK || "";
 const rl = readline.createInterface({ input: process.stdin });
 function send(o){ process.stdout.write(JSON.stringify(o) + "\\n"); }
 rl.on("line", (line) => {
@@ -38,6 +40,18 @@ rl.on("line", (line) => {
     send({ jsonrpc: "2.0", id: m.id, result: { tools: TOOLS } });
   } else if (m.method === "tools/call") {
     const name = m.params?.name || "";
+    // We are the only party that sees the real name and arguments: cursor-agent
+    // reports bridged calls as {title:"MCP: tool", rawInput:{}} with neither
+    // name nor arguments, so the notification stream cannot carry this. Append
+    // to the sink the parent watches before answering, so the call is recorded
+    // by the time the agent announces it.
+    if (SINK) {
+      try {
+        fs.appendFileSync(SINK, JSON.stringify({ name, arguments: m.params?.arguments ?? {} }) + "\\n");
+      } catch (e) {
+        process.stderr.write("[client-tools] sink write failed: " + e.message + "\\n");
+      }
+    }
     const seeded = RESULTS[name];
     const text = seeded !== undefined
       ? String(seeded)
@@ -53,6 +67,65 @@ function writeBridgeScript(scriptFile) {
   // Always rewrite so bridge upgrades land without a server restart.
   fs.writeFileSync(scriptPath, CLIENT_TOOLS_MCP_SCRIPT);
   return scriptPath;
+}
+
+/**
+ * Per-request sink the bridge script appends real tool calls to.
+ *
+ * Needed because ACP gives us no structured field for which MCP tool an agent
+ * is invoking: verified live against cursor-agent, a bridged call arrives as
+ * `{title: "MCP: tool", rawInput: {}}` — no name, no arguments. The bridge
+ * server is the one process that does see them, so it records them here and the
+ * executor drains this file.
+ *
+ * Lives in a fresh mkdtemp directory so concurrent turns cannot cross-read, and
+ * is removed on cleanup.
+ */
+export function createToolCallSink() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "9router-acp-tools-"));
+  return path.join(dir, "calls.jsonl");
+}
+
+/**
+ * Read and clear whatever the bridge recorded. Safe to call constantly: an
+ * absent or empty file yields an empty list. A line that does not parse (the
+ * bridge crashed mid-write) is dropped rather than thrown — this runs inside
+ * the streaming path.
+ */
+export function drainToolCallSink(sink) {
+  if (!sink) return [];
+  let raw;
+  try {
+    raw = fs.readFileSync(sink, "utf8");
+  } catch {
+    return [];
+  }
+  if (!raw) return [];
+  try {
+    fs.writeFileSync(sink, "");
+  } catch {
+    /* the bridge may not have created it yet; a lost drain costs one round trip */
+  }
+  const out = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const call = JSON.parse(line);
+      if (call && typeof call.name === "string" && call.name) out.push(call);
+    } catch {
+      /* torn write — the call is simply missed, never fatal */
+    }
+  }
+  return out;
+}
+
+export function cleanupToolCallSink(sink) {
+  if (!sink) return;
+  try {
+    fs.rmSync(path.dirname(sink), { recursive: true, force: true });
+  } catch {
+    /* best effort; the OS reaps tmpdir */
+  }
 }
 
 /**
@@ -89,18 +162,42 @@ export function clientToolDeclarations(tools, prefix = "") {
 }
 
 /**
- * MCP stdio server entry for `session/new`, or null when the caller sent no
- * usable tools. An ACP `mcpServers` element for stdio is
- * `{name, command, args, env}`.
+ * ACP stdio server entry for `session/new`, or null when the caller sent no
+ * usable tools.
+ *
+ * `env` is an array of `{name, value}` objects, not an object and not an array
+ * of `NAME=VALUE` strings. Verified live, by making cursor-agent reject our
+ * entry three ways in a row: `mcpServers` is a union of three variants — http
+ * (`type:"http"`, url, headers), sse (`type:"sse"`, url, headers) and stdio —
+ * and the stdio variant first rejected an object env
+ * (`{expected:"array", path:["env"]}`), then rejected string entries
+ * (`{expected:"object", path:["env",0]}`). devin's config.json takes the object
+ * form, which is why this worked there and failed everywhere else.
+ *
+ * @param {object} [options]
+ * @param {string} [options.prefix]        per-agent name prefix
+ * @param {string} [options.scriptFile]
+ * @param {string} [options.sink]          path the bridge records calls into
+ * @param {boolean} [options.envAsObject]  devin-only: object env instead of the
+ *                                         array the ACP stdio variant wants
  */
 export function buildClientToolsMcp(tools, resultMap, options = {}) {
-  const { prefix = "", scriptFile = "9router-acp-client-tools.mjs" } = options;
+  const {
+    prefix = "",
+    scriptFile = "9router-acp-client-tools.mjs",
+    sink = "",
+    envAsObject = false,
+  } = options;
   const declarations = clientToolDeclarations(tools, prefix);
   if (!declarations.length) return null;
-  const env = { ACP_CLIENT_TOOLS: JSON.stringify(declarations) };
+  const pairs = { ACP_CLIENT_TOOLS: JSON.stringify(declarations) };
   if (resultMap && Object.keys(resultMap).length) {
-    env.ACP_CLIENT_TOOL_RESULTS = JSON.stringify(resultMap);
+    pairs.ACP_CLIENT_TOOL_RESULTS = JSON.stringify(resultMap);
   }
+  if (sink) pairs.ACP_CLIENT_TOOLS_SINK = sink;
+  const env = envAsObject
+    ? pairs
+    : Object.entries(pairs).map(([name, value]) => ({ name, value }));
   return {
     name: CLIENT_TOOLS_SERVER_NAME,
     command: process.execPath,

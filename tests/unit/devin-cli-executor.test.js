@@ -406,6 +406,84 @@ describe("DevinCliExecutor ACP session/new", () => {
     expect(child.opts.env.XDG_CONFIG_HOME).toBeUndefined();
   });
 
+  it("routes a client-tool call from the bridge sink, not from notification text", async () => {
+    // devin names the tool in its notification title, so the title path works.
+    // The sink is the path that does not depend on an agent's prose keeping the
+    // same shape: only the bridge server sees the real name and arguments.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const child = new EventEmitter();
+    child.writes = [];
+    child.stdin = new EventEmitter();
+    child.stdin.destroyed = false;
+    child.stdin.end = () => { child.stdin.destroyed = true; };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.killed = false;
+    child.kill = () => { child.killed = true; };
+    child.args = ["acp"];
+    child.opts = { env: {} };
+    spawnMock.mockImplementation((bin, args, opts) => {
+      child.args = args;
+      child.opts = opts;
+      return child;
+    });
+    const send = (o) => child.stdout.emit("data", Buffer.from(JSON.stringify(o) + "\n"));
+    child.stdin.write = (data) => {
+      child.writes.push(String(data));
+      handle(JSON.parse(String(data).trim()));
+      return true;
+    };
+    function handle(msg) {
+      if (msg.method === "initialize") send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });
+      else if (msg.method === "session/new") send({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s1" } });
+      else if (msg.method === "session/prompt") {
+        // The bridge records the call before answering, so the sink already
+        // has it by the time the agent announces anything.
+        const cfgPath = path.join(child.opts.env.XDG_CONFIG_HOME, "devin", "config.json");
+        const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+        const sink = cfg.mcpServers.clientTools.env.ACP_CLIENT_TOOLS_SINK;
+        expect(sink).toBeTruthy();
+        fs.appendFileSync(sink, JSON.stringify({ name: "mcp_get_weather", arguments: { city: "Paris" } }) + "\n");
+        // A notification that names nothing, as cursor-agent actually sends.
+        send({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "s1", update: { sessionUpdate: "tool_call", toolCallId: "call_sink", title: "MCP: tool", rawInput: {} } },
+        });
+        send({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "s1", update: { sessionUpdate: "tool_call_update", toolCallId: "call_sink", status: "completed" } },
+        });
+      }
+    }
+
+    const exec = new DevinCliExecutor();
+    const { response } = await exec.execute({
+      model: "swe-1.6-fast",
+      body: {
+        messages: [{ role: "user", content: "weather?" }],
+        tools: [{ type: "function", function: { name: "get_weather", parameters: { type: "object" } } }],
+      },
+      credentials: {},
+      log: { info() {}, debug() {} },
+    });
+    const reader = response.body.getReader();
+    let acc = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      acc += new TextDecoder().decode(value);
+      if (acc.includes("[DONE]")) break;
+    }
+    const tc = JSON.parse(acc.match(/"tool_calls":\[(\{.*?\})\]/)?.[1] ?? "{}");
+    // mcp_ stripped back off, the name the client declared.
+    expect(tc.function.name).toBe("get_weather");
+    expect(JSON.parse(tc.function.arguments).city).toBe("Paris");
+    expect(acc).toContain('"finish_reason":"tool_calls"');
+  });
+
   it("exposes body.tools as an MCP server (sets XDG_CONFIG_HOME + writes script)", async () => {
     const fs = await import("node:fs");
     const os = await import("node:os");

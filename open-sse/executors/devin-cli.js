@@ -70,9 +70,13 @@ function resolveDevinBin() {
 // prefix, so it is the one agent that configures a prefix.
 import {
   buildClientToolsMcp,
+  cleanupToolCallSink,
   clientToolDeclarations,
+  createToolCallSink,
   detectClientToolName,
+  drainToolCallSink,
   extractClientToolResults,
+  fromMcpToolName,
 } from "./lib/acpClientTools.js";
 
 const DEVIN_CLIENT_TOOL_PREFIX = "mcp_";
@@ -130,9 +134,19 @@ export class DevinCliExecutor extends BaseExecutor {
     const clientToolResults = extractClientToolResults(messages, {
       prefix: DEVIN_CLIENT_TOOL_PREFIX,
     });
+    // The bridge records real calls here. devin does name the tool in its
+    // notification title, so the title path below still works, but the sink
+    // does not depend on an agent's prose staying the same shape.
+    const clientToolSink = clientTools.some((t) => t?.function?.name || t?.name)
+      ? createToolCallSink()
+      : null;
     const clientToolsMcp = buildClientToolsMcp(clientTools, clientToolResults, {
       prefix: DEVIN_CLIENT_TOOL_PREFIX,
       scriptFile: "9router-devin-client-tools.mjs",
+      sink: clientToolSink || "",
+      // devin's config.json takes env as an object; the ACP stdio variant
+      // cursor/opencode validate against wants an array of {name, value}.
+      envAsObject: true,
     });
     const hasClientTools = !!clientToolsMcp;
     const knownClientTools = new Set(
@@ -232,6 +246,7 @@ export class DevinCliExecutor extends BaseExecutor {
           );
           emit("data: [DONE]\n\n");
           controller.close();
+          cleanupToolCallSink(clientToolSink);
         });
 
         if (signal) {
@@ -296,6 +311,19 @@ export class DevinCliExecutor extends BaseExecutor {
         // ACP tool_call is upsert-by-id: the first event has title, a later update
         // may only carry rawInput (title omitted). Track pending client-tool calls.
         const pendingClientTools = new Map(); // toolCallId → original tool name
+        const takeSinkCall = () => {
+          if (!clientToolSink || toolUseEmitted) return false;
+          const calls = drainToolCallSink(clientToolSink);
+          if (!calls.length) return false;
+          toolUseEmitted = true;
+          emitToolUse(
+            fromMcpToolName(calls[0].name, DEVIN_CLIENT_TOOL_PREFIX),
+            calls[0].arguments,
+            `call_${Date.now()}`
+          );
+          finish(null, "tool_calls");
+          return true;
+        };
         const emitToolUse = (toolName, args, toolCallId) => {
           const argsStr = typeof args === "string" ? args : JSON.stringify(args ?? {});
           if (!roleEmitted) {
@@ -382,6 +410,7 @@ export class DevinCliExecutor extends BaseExecutor {
 
           controller.close();
           cleanupMcp();
+          cleanupToolCallSink(clientToolSink);
         };
 
         // ── stdout reader (NDJSON) ──────────────────────────────────────────
@@ -526,6 +555,7 @@ export class DevinCliExecutor extends BaseExecutor {
                 !toolUseEmitted &&
                 (type === "tool_call" || type === "tool_call_update")
               ) {
+                if (hasClientTools && !toolUseEmitted && takeSinkCall()) return;
                 const tcId = update.toolCallId;
                 // devin names the tool in `title` ("Calling mcp_x from clientTools")
                 // rather than a structured field; detectClientToolName matches the

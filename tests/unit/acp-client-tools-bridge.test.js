@@ -1,6 +1,6 @@
 // The client-tool bridge inside the shared ACP executor.
 //
-// `acpClientTools.test.js` covers the pure functions. This covers the wiring
+// `acp-client-tools.test.js` covers the pure functions. This covers the wiring
 // that actually decides whether a client tool works:
 //
 //   1. `body.tools` are registered in `session/new` as a stdio MCP server.
@@ -28,11 +28,6 @@ vi.mock("node:child_process", () => ({
 
 const { OpenCodeAcpExecutor } = await import("open-sse/executors/opencode-acp.js");
 
-const PERM_OPTS = [
-  { optionId: "cancel", name: "Reject", kind: "reject_once" },
-  { optionId: "allow", name: "Allow", kind: "allow_always" },
-];
-
 const READ_FILE = {
   type: "function",
   function: {
@@ -46,15 +41,24 @@ const READ_FILE = {
   },
 };
 
+// ACP stdio servers carry env as an array of {name, value} — cursor validates
+// the stdio variant of the mcpServers union and rejects an object env.
+const envObj = (env) =>
+  Object.fromEntries((env || []).map((e) => [e.name, e.value]));
+
 /**
  * Fake opencode ACP subprocess. Answers everything the executor sends, and
- * replays a scripted list of raw `session/update` payloads on `session/prompt`
- * so a test can reproduce the exact event order a real agent produces.
+ * replays a scripted list of raw `session/update` payloads on `session/prompt`.
+ *
+ * `bridgeCalls` is how the fake plays the bridge server: each entry is appended
+ * to the sink the executor handed us, at the moment the prompt starts. That is
+ * the real ordering — the bridge records the call before it answers, so the
+ * record exists by the time the agent announces the call — and it is the only
+ * place the real name and arguments exist at all.
  */
-function makeFakeChild({ updates = [], stopReason = "end_turn" } = {}) {
+function makeFakeChild({ updates = [], stopReason = "end_turn", bridgeCalls = [] } = {}) {
   const child = new EventEmitter();
   child.writes = [];
-  child.permissionAnswers = [];
   child.sessionNewParams = null;
   child.stdin = new EventEmitter();
   child.stdin.destroyed = false;
@@ -85,6 +89,14 @@ function makeFakeChild({ updates = [], stopReason = "end_turn" } = {}) {
       params: { sessionId: "fake-session", update },
     });
 
+  const recordBridgeCalls = () => {
+    if (!bridgeCalls.length) return;
+    const servers = child.sessionNewParams?.mcpServers || [];
+    const sink = envObj(servers.find((s) => s?.name === "clientTools")?.env)?.ACP_CLIENT_TOOLS_SINK;
+    if (!sink) return;
+    for (const c of bridgeCalls) fs.appendFileSync(sink, JSON.stringify(c) + "\n");
+  };
+
   function handle(msg) {
     if (msg.method === "initialize") {
       send({
@@ -113,6 +125,7 @@ function makeFakeChild({ updates = [], stopReason = "end_turn" } = {}) {
     } else if (msg.method === "session/set_config_option") {
       send({ jsonrpc: "2.0", id: msg.id, result: { configOptions: [] } });
     } else if (msg.method === "session/prompt") {
+      recordBridgeCalls();
       for (const u of updates) notify(u);
       send({ jsonrpc: "2.0", id: msg.id, result: { stopReason } });
     }
@@ -121,8 +134,8 @@ function makeFakeChild({ updates = [], stopReason = "end_turn" } = {}) {
   return child;
 }
 
-async function runExecute({ updates, stopReason, body } = {}) {
-  const child = makeFakeChild({ updates, stopReason });
+async function runExecute({ updates, stopReason, bridgeCalls, body } = {}) {
+  const child = makeFakeChild({ updates, stopReason, bridgeCalls });
   spawnMock.mockImplementation(() => child);
   const exec = new OpenCodeAcpExecutor();
   const { response } = await exec.execute({
@@ -178,12 +191,15 @@ describe("ACP client-tool bridge: registration", () => {
     expect(Array.isArray(bridge.args) && bridge.args.length).toBe(1);
     // The script must exist by the time the agent is told to spawn it.
     expect(fs.existsSync(bridge.args[0])).toBe(true);
-    expect(bridge.env.ACP_CLIENT_TOOLS).toBeTruthy();
+    expect(bridge.env).toEqual([
+      { name: "ACP_CLIENT_TOOLS", value: expect.any(String) },
+      { name: "ACP_CLIENT_TOOLS_SINK", value: expect.stringContaining("9router-acp-tools-") },
+    ]);
   });
 
   it("declares the client's tools with MCP names, not OpenAI names", async () => {
     const { child } = await runExecute({ body: { tools: [READ_FILE] } });
-    const declared = JSON.parse(bridgeOf(child).env.ACP_CLIENT_TOOLS);
+    const declared = JSON.parse(envObj(bridgeOf(child).env).ACP_CLIENT_TOOLS);
     expect(declared).toHaveLength(1);
     expect(declared[0].name).toBe("read_file");
     expect(declared[0].description).toBe("Read a file from disk");
@@ -206,19 +222,66 @@ describe("ACP client-tool bridge: registration", () => {
       },
     });
     const bridge = bridgeOf(child);
-    expect(JSON.parse(bridge.env.ACP_CLIENT_TOOL_RESULTS)).toEqual({ read_file: "hello from disk" });
+    expect(JSON.parse(envObj(bridge.env).ACP_CLIENT_TOOL_RESULTS)).toEqual({ read_file: "hello from disk" });
+  });
+
+  it("gives each turn its own sink so concurrent turns cannot cross-read", async () => {
+    const a = await runExecute({ body: { tools: [READ_FILE] } });
+    const b = await runExecute({ body: { tools: [READ_FILE] } });
+    const sinkA = envObj(bridgeOf(a.child).env).ACP_CLIENT_TOOLS_SINK;
+    const sinkB = envObj(bridgeOf(b.child).env).ACP_CLIENT_TOOLS_SINK;
+    expect(sinkA).not.toBe(sinkB);
+    // A finished turn must not leave its sink behind in tmp.
+    expect(fs.existsSync(sinkA)).toBe(false);
   });
 });
 
-describe("ACP client-tool bridge: call routing", () => {
-  // A real agent announces the call first (name in the title), asks permission,
-  // then reports the arguments in a follow-up update.
+describe("ACP client-tool bridge: the sink is the source of truth", () => {
+  // Verified live against cursor-agent 3000.x: a bridged call arrives as
+  // {title: "MCP: tool", rawInput: {}} — the notification names nothing, so
+  // matching the notification text can never work. Only the bridge server sees
+  // the real name and arguments, so it records them and the executor drains it.
+  it("routes a call recorded in the sink despite a nameless notification", async () => {
+    const { acc } = await runExecute({
+      bridgeCalls: [{ name: "read_file", arguments: { path: "/tmp/live.txt" } }],
+      updates: [
+        { sessionUpdate: "tool_call", toolCallId: "call_x", kind: "other", status: "pending", title: "MCP: tool", rawInput: {} },
+        { sessionUpdate: "tool_call_update", toolCallId: "call_x", status: "in_progress" },
+        { sessionUpdate: "tool_call_update", toolCallId: "call_x", status: "completed", rawOutput: { success: true } },
+        { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "ignored the result" } },
+      ],
+      body: { tools: [READ_FILE] },
+    });
+    const calls = toolCallFrames(acc);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe("read_file");
+    expect(JSON.parse(calls[0].arguments)).toEqual({ path: "/tmp/live.txt" });
+    expect(frames(acc).at(-1).choices[0].finish_reason).toBe("tool_calls");
+  });
+
+  it("ignores the agent's own tool when the sink is empty", async () => {
+    const { acc } = await runExecute({
+      updates: [
+        { sessionUpdate: "tool_call", toolCallId: "call_9", kind: "read", status: "pending", title: "Read /tmp/secret" },
+        { sessionUpdate: "tool_call_update", toolCallId: "call_9", status: "completed", rawInput: { path: "/tmp/secret" } },
+        { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } },
+      ],
+      body: { tools: [READ_FILE] },
+    });
+    expect(toolCallFrames(acc)).toEqual([]);
+    expect(acc).toContain("done");
+  });
+});
+
+describe("ACP client-tool bridge: call routing fallback", () => {
+  // Agents that do name the tool in the notification still work — devin puts
+  // it in title as "Calling mcp_x from clientTools".
   const announceAndRun = [
     { sessionUpdate: "tool_call", toolCallId: "call_1", kind: "read", status: "pending", title: "Calling read_file from clientTools" },
     { sessionUpdate: "tool_call_update", toolCallId: "call_1", kind: "read", status: "in_progress", title: "Calling read_file from clientTools", rawInput: { path: "/tmp/a.txt" } },
   ];
 
-  it("turns a bridged call into an OpenAI tool_call and ends the turn", async () => {
+  it("turns a named call into an OpenAI tool_call and ends the turn", async () => {
     const { acc } = await runExecute({
       updates: announceAndRun,
       body: { tools: [READ_FILE] },
@@ -228,8 +291,7 @@ describe("ACP client-tool bridge: call routing", () => {
     // Reported under the name the caller declared, not the MCP-wrapped one.
     expect(calls[0].name).toBe("read_file");
     expect(JSON.parse(calls[0].arguments)).toEqual({ path: "/tmp/a.txt" });
-    const last = frames(acc).at(-1);
-    expect(last.choices[0].finish_reason).toBe("tool_calls");
+    expect(frames(acc).at(-1).choices[0].finish_reason).toBe("tool_calls");
   });
 
   it("joins the announcement and the arguments when they arrive separately", async () => {
@@ -243,21 +305,6 @@ describe("ACP client-tool bridge: call routing", () => {
     const calls = toolCallFrames(acc);
     expect(calls).toHaveLength(1);
     expect(JSON.parse(calls[0].arguments)).toEqual({ path: "/tmp/b.txt" });
-  });
-
-  it("leaves the agent's own tools inside the agent", async () => {
-    // The agent reads a file with its own Read tool. Forwarding this would make
-    // the client re-run a sandboxed read and answer a request it was never asked.
-    const { acc } = await runExecute({
-      updates: [
-        { sessionUpdate: "tool_call", toolCallId: "call_9", kind: "read", status: "pending", title: "Read /tmp/secret" },
-        { sessionUpdate: "tool_call_update", toolCallId: "call_9", status: "completed", rawInput: { path: "/tmp/secret" } },
-        { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } },
-      ],
-      body: { tools: [READ_FILE] },
-    });
-    expect(toolCallFrames(acc)).toEqual([]);
-    expect(acc).toContain("done");
   });
 
   it("does not forward a bridged call the agent abandoned", async () => {
@@ -290,7 +337,7 @@ describe("ACP client-tool bridge: call routing", () => {
     });
     const bridge = bridgeOf(child);
     expect(child.sessionNewParams.mcpServers).toHaveLength(1);
-    expect(JSON.parse(bridge.env.ACP_CLIENT_TOOLS).map((t) => t.name)).toEqual(["read_file", "list_dir"]);
+    expect(JSON.parse(envObj(bridge.env).ACP_CLIENT_TOOLS).map((t) => t.name)).toEqual(["read_file", "list_dir"]);
   });
 
   it("keeps the session cwd independent of the bridge", async () => {

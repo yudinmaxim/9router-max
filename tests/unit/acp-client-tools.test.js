@@ -32,6 +32,11 @@ describe("client tool declarations", () => {
   });
 });
 
+// ACP stdio servers carry env as an array of {name, value} — cursor validates
+// the stdio variant of the mcpServers union and rejects an object env.
+const envObj = (env) =>
+  Object.fromEntries((env || []).map((e) => [e.name, e.value]));
+
 describe("buildClientToolsMcp", () => {
   it("returns null when the caller sent no tools", () => {
     expect(buildClientToolsMcp([], {})).toBeNull();
@@ -44,15 +49,15 @@ describe("buildClientToolsMcp", () => {
     expect(server.name).toBe(CLIENT_TOOLS_SERVER_NAME);
     expect(server.command).toBe(process.execPath);
     expect(server.args).toHaveLength(1);
-    expect(JSON.parse(server.env.ACP_CLIENT_TOOLS)[0].name).toBe("ping");
-    expect(server.env.ACP_CLIENT_TOOL_RESULTS).toBeUndefined();
+    expect(JSON.parse(envObj(server.env).ACP_CLIENT_TOOLS)[0].name).toBe("ping");
+    expect(envObj(server.env).ACP_CLIENT_TOOL_RESULTS).toBeUndefined();
   });
 
   it("seeds prior results, and only when there are any", () => {
     const seeded = buildClientToolsMcp([{ function: { name: "ping" } }], { ping: "pong" });
-    expect(JSON.parse(seeded.env.ACP_CLIENT_TOOL_RESULTS)).toEqual({ ping: "pong" });
+    expect(JSON.parse(envObj(seeded.env).ACP_CLIENT_TOOL_RESULTS)).toEqual({ ping: "pong" });
     const empty = buildClientToolsMcp([{ function: { name: "ping" } }], {});
-    expect(empty.env.ACP_CLIENT_TOOL_RESULTS).toBeUndefined();
+    expect(envObj(empty.env).ACP_CLIENT_TOOL_RESULTS).toBeUndefined();
   });
 });
 

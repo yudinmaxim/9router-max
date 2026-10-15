@@ -73,9 +73,13 @@ import { ACP_PERMISSION_HEADER, ACP_PERMISSION_BODY_KEY } from "../../config/run
 import {
   CLIENT_TOOLS_SERVER_NAME,
   buildClientToolsMcp,
+  cleanupToolCallSink,
   clientToolDeclarations,
+  createToolCallSink,
   detectClientToolName,
+  drainToolCallSink,
   extractClientToolResults,
+  fromMcpToolName,
 } from "./acpClientTools.js";
 
 const ACP_URL = "acp://stdio";
@@ -415,9 +419,18 @@ export class AcpAgentExecutor extends BaseExecutor {
     const clientToolPrefix = this.acp.clientToolPrefix || "";
     const clientTools = Array.isArray(b.tools) ? b.tools.filter(Boolean) : [];
     const clientToolResults = extractClientToolResults(messages, { prefix: clientToolPrefix });
+    // ACP carries no structured field for which MCP tool an agent is invoking —
+    // verified live, cursor-agent reports a bridged call as
+    // {title:"MCP: tool", rawInput:{}} with neither name nor arguments. The
+    // bridge server is the only process that sees them, so it records calls in
+    // a per-request sink we drain.
+    let clientToolSink = clientTools.some((t) => t?.function?.name || t?.name)
+      ? createToolCallSink()
+      : null;
     const clientToolsMcp = buildClientToolsMcp(clientTools, clientToolResults, {
       prefix: clientToolPrefix,
       scriptFile: this.acp.clientToolsScriptFile || "9router-acp-client-tools.mjs",
+      sink: clientToolSink || "",
     });
     const knownClientTools = new Set(
       clientToolDeclarations(clientTools, clientToolPrefix).map((t) => t.name)
@@ -552,6 +565,7 @@ export class AcpAgentExecutor extends BaseExecutor {
         // tool_call and end the turn with `finish_reason: "tool_calls"` — the
         // client runs the tool and its result comes back on the next request.
         let toolUseEmitted = false;
+        let sinkPoll = null;
         const pendingClientTools = new Map(); // toolCallId → original tool name
         const emitToolUse = (toolName, args, toolCallId) => {
           const argsStr = typeof args === "string" ? args : JSON.stringify(args ?? {});
@@ -561,6 +575,21 @@ export class AcpAgentExecutor extends BaseExecutor {
               { index: 0, id: toolCallId, type: "function", function: { name: toolName, arguments: argsStr } },
             ],
           });
+        };
+
+        /**
+         * Drain the sink and, if the agent called one of our tools, surface it
+         * and end the turn. Returns true when it handled the call.
+         */
+        const takeSinkCall = () => {
+          if (!clientToolSink || toolUseEmitted) return false;
+          const calls = drainToolCallSink(clientToolSink);
+          if (!calls.length) return false;
+          const call = calls[0];
+          toolUseEmitted = true;
+          emitToolUse(fromMcpToolName(call.name, clientToolPrefix), call.arguments, `call_${Date.now()}`);
+          finish(null, "tool_calls");
+          return true;
         };
 
         const finish = (error, finishReason = "stop", errorCode) => {
@@ -605,8 +634,29 @@ export class AcpAgentExecutor extends BaseExecutor {
           }, 2000);
           killTimer.unref?.();
 
+          if (sinkPoll) {
+            clearInterval(sinkPoll);
+            sinkPoll = null;
+          }
+          cleanupToolCallSink(clientToolSink);
+          clientToolSink = null;
+
           closeStream();
         };
+
+        // Safety net for an agent that calls a bridged tool without announcing
+        // it in the notification stream. Every cursor-agent build tested does
+        // announce, so this is cheap insurance rather than the main path.
+        if (clientToolsMcp) {
+          sinkPoll = setInterval(() => {
+            if (finished || toolUseEmitted) return;
+            if (takeSinkCall()) {
+              clearInterval(sinkPoll);
+              sinkPoll = null;
+            }
+          }, 50);
+          sinkPoll.unref?.();
+        }
 
         child.on("error", (err) => {
           spawnError = err;
@@ -810,10 +860,16 @@ export class AcpAgentExecutor extends BaseExecutor {
                 // where the real answer lives.
                 rememberToolKind(seenToolKinds, update);
 
-                // Client-tool bridge: the agent invoking a tool we declared as
-                // MCP. ACP upserts tool calls by id — the first event may carry
-                // only the name, a later update only `rawInput` — so remember the
-                // name until the arguments show up.
+                // Client-tool bridge, authoritative path: the bridge server
+                // recorded the real name and arguments, because this
+                // notification carries neither.
+                if (clientToolsMcp && !toolUseEmitted && takeSinkCall()) return;
+
+                // Client-tool bridge, fallback: agents that do name the tool in
+                // the notification (devin: "Calling mcp_x from clientTools").
+                // ACP upserts tool calls by id — the first event may carry only
+                // the name, a later update only `rawInput` — so remember the name
+                // until the arguments show up.
                 if (clientToolsMcp && !toolUseEmitted) {
                   const tcId = update.toolCallId;
                   const detected = detectClientToolName(update, knownClientTools, clientToolPrefix);
