@@ -48,8 +48,10 @@
  * Client-side `body.tools` therefore reach the agent the other way round: the
  * agent advertises `mcpCapabilities: {http: true, sse: true}`, so registering
  * a bridge MCP server in `session/new` is the supported path for handing the
- * agent tools it cannot run itself. Not wired up yet — the agent currently runs
- * the task end to end with its own toolbelt and `body.tools` are ignored.
+ * agent tools it cannot run itself. That bridge is live: `./acpClientTools.js`
+ * declares `body.tools` as a stdio MCP server registered in `session/new`, and
+ * when the agent calls one we emit an OpenAI `tool_calls` delta and end the
+ * turn. The agent's own tools stay inside its sandbox and are only logged.
  */
 
 import { spawn } from "node:child_process";
@@ -68,6 +70,13 @@ import {
   chooseOption,
 } from "./acpPermissions.js";
 import { ACP_PERMISSION_HEADER, ACP_PERMISSION_BODY_KEY } from "../../config/runtimeConfig.js";
+import {
+  CLIENT_TOOLS_SERVER_NAME,
+  buildClientToolsMcp,
+  clientToolDeclarations,
+  detectClientToolName,
+  extractClientToolResults,
+} from "./acpClientTools.js";
 
 const ACP_URL = "acp://stdio";
 
@@ -398,6 +407,31 @@ export class AcpAgentExecutor extends BaseExecutor {
     // so this map is the only truthful source of what the action is.
     const seenToolKinds = new Map();
 
+    // Client tools the caller sent in `body.tools`. Agents do not read these
+    // from the request body — they only see MCP servers registered in
+    // `session/new` — so they are bridged. Agents that rename bridged tools to
+    // something the caller never declared would misreport the call back, so
+    // the prefix stays empty unless the agent forces one.
+    const clientToolPrefix = this.acp.clientToolPrefix || "";
+    const clientTools = Array.isArray(b.tools) ? b.tools.filter(Boolean) : [];
+    const clientToolResults = extractClientToolResults(messages, { prefix: clientToolPrefix });
+    const clientToolsMcp = buildClientToolsMcp(clientTools, clientToolResults, {
+      prefix: clientToolPrefix,
+      scriptFile: this.acp.clientToolsScriptFile || "9router-acp-client-tools.mjs",
+    });
+    const knownClientTools = new Set(
+      clientToolDeclarations(clientTools, clientToolPrefix).map((t) => t.name)
+    );
+    if (clientToolsMcp) {
+      log?.info?.(
+        tag,
+        `bridging ${clientTools.length} client tool(s) as MCP` +
+          (Object.keys(clientToolResults).length
+            ? ` (seeded ${Object.keys(clientToolResults).length} result(s))`
+            : "")
+      );
+    }
+
     log?.info?.(tag, `${exe} ${args.join(" ")} → model=${model}, bin=${bin}, cwd=${workspaceCwd}`);
 
     const sseStream = new ReadableStream({
@@ -514,6 +548,21 @@ export class AcpAgentExecutor extends BaseExecutor {
           chunk({ reasoning_content: text });
         };
 
+        // The agent called a tool the client declared. Surface it as an OpenAI
+        // tool_call and end the turn with `finish_reason: "tool_calls"` — the
+        // client runs the tool and its result comes back on the next request.
+        let toolUseEmitted = false;
+        const pendingClientTools = new Map(); // toolCallId → original tool name
+        const emitToolUse = (toolName, args, toolCallId) => {
+          const argsStr = typeof args === "string" ? args : JSON.stringify(args ?? {});
+          ensureRole();
+          chunk({
+            tool_calls: [
+              { index: 0, id: toolCallId, type: "function", function: { name: toolName, arguments: argsStr } },
+            ],
+          });
+        };
+
         const finish = (error, finishReason = "stop", errorCode) => {
           if (finished) return;
           finished = true;
@@ -602,8 +651,12 @@ export class AcpAgentExecutor extends BaseExecutor {
             if (!initDone && msg.result !== undefined && !msg.method) {
               initDone = true;
               // `mcpServers` must be a sequence (an object is rejected with
-              // -32602). The agent runs its own tools; we pass none.
-              sendRpc("session/new", { cwd: workspaceCwd, mcpServers: [] });
+              // -32602). Empty unless the caller sent tools we are bridging —
+              // the agent runs its own tools either way.
+              sendRpc("session/new", {
+                cwd: workspaceCwd,
+                mcpServers: clientToolsMcp ? [clientToolsMcp] : [],
+              });
               continue;
             }
 
@@ -756,11 +809,38 @@ export class AcpAgentExecutor extends BaseExecutor {
                 // that follows reports `kind: "other"`, so this notification is
                 // where the real answer lives.
                 rememberToolKind(seenToolKinds, update);
+
+                // Client-tool bridge: the agent invoking a tool we declared as
+                // MCP. ACP upserts tool calls by id — the first event may carry
+                // only the name, a later update only `rawInput` — so remember the
+                // name until the arguments show up.
+                if (clientToolsMcp && !toolUseEmitted) {
+                  const tcId = update.toolCallId;
+                  const detected = detectClientToolName(update, knownClientTools, clientToolPrefix);
+                  if (tcId && detected) pendingClientTools.set(tcId, detected);
+                  const origName = tcId ? pendingClientTools.get(tcId) : null;
+                  const abandoned = update.status === "cancelled" || update.status === "failed";
+                  if (origName && abandoned) {
+                    // The agent gave up on this call — usually because the
+                    // permission request above was denied. Do not hand the
+                    // client a tool_call the agent is not going to make.
+                    pendingClientTools.delete(tcId);
+                    continue;
+                  }
+                  if (origName && update.rawInput) {
+                    pendingClientTools.delete(tcId);
+                    toolUseEmitted = true;
+                    emitToolUse(origName, update.rawInput, tcId || `call_${Date.now()}`);
+                    finish(null, "tool_calls");
+                    return;
+                  }
+                  continue;
+                }
+
                 // The agent runs its own tools against its own sandbox — these
                 // are progress reports, not calls the client should service.
                 // Surfacing them as OpenAI tool_calls would re-run them
-                // client-side. Client-side tools reach the agent the other way
-                // round, via mcpServers in session/new.
+                // client-side.
                 if (update.status === "pending" || type === "tool_call") {
                   log?.debug?.(tag, `tool: ${update.title || update.kind || "?"}`);
                 }
@@ -820,7 +900,9 @@ export class AcpAgentExecutor extends BaseExecutor {
         cwd: workspaceCwd,
         messages: messages.length,
         promptLength: promptText.length,
-        clientToolsIgnored: Array.isArray(b.tools) ? b.tools.length : 0,
+        clientTools: clientTools.map((t) => t?.function?.name || t?.name).filter(Boolean),
+        clientToolResults: Object.keys(clientToolResults),
+        clientToolsBridged: clientToolsMcp ? CLIENT_TOOLS_SERVER_NAME : null,
       },
     };
   }

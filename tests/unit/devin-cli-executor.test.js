@@ -277,7 +277,7 @@ describe("DevinCliExecutor ACP session/new", () => {
       if (done) break;
     }
     expect(capturedCfg).toBeTruthy();
-    const results = JSON.parse(capturedCfg.mcpServers.clientTools.env.DEVIN_MCP_RESULTS);
+    const results = JSON.parse(capturedCfg.mcpServers.clientTools.env.ACP_CLIENT_TOOL_RESULTS);
     expect(results.mcp_get_weather).toBe("28C sunny");
     expect(capturedPrompt).toContain("get_weather");
     expect(capturedPrompt).toContain("28C sunny");
@@ -436,6 +436,7 @@ describe("DevinCliExecutor ACP session/new", () => {
     const scriptPath = path.join(os.tmpdir(), "9router-devin-client-tools.mjs");
     expect(fs.existsSync(scriptPath)).toBe(true);
     expect(fs.readFileSync(scriptPath, "utf8")).toContain("clientTools");
-    expect(fs.readFileSync(scriptPath, "utf8")).toContain("DEVIN_MCP_TOOLS");
+    // Env names are the shared bridge's, not devin's — the script moved to lib/acpClientTools.js.
+    expect(fs.readFileSync(scriptPath, "utf8")).toContain("ACP_CLIENT_TOOLS");
   });
 });

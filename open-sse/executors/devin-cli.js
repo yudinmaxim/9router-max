@@ -65,124 +65,17 @@ function resolveDevinBin() {
 }
 
 // ─── Client-tools → MCP bridge ───────────────────────────────────────────────
-// devin only invokes built-in + MCP tools, not OpenAI function-calling schemas.
-// body.tools are exposed as a stdio MCP server "clientTools" so devin can call
-// them. When devin calls one, we emit OpenAI tool_use and end the turn; the
-// client executes and returns tool_result on the next request. That next request
-// re-spawns with the full history (including tool_calls + tool results) and
-// seeds the MCP server with those results so a re-call gets the real data.
-// Tool schemas via DEVIN_MCP_TOOLS; prior results via DEVIN_MCP_RESULTS.
+// The bridge itself lives in lib/acpClientTools.js — it is protocol-level, not
+// devin-specific. devin only discovers MCP tools whose name carries the `mcp_`
+// prefix, so it is the one agent that configures a prefix.
+import {
+  buildClientToolsMcp,
+  clientToolDeclarations,
+  detectClientToolName,
+  extractClientToolResults,
+} from "./lib/acpClientTools.js";
 
-const CLIENT_TOOLS_MCP_SCRIPT = `
-import readline from "node:readline";
-const TOOLS = JSON.parse(process.env.DEVIN_MCP_TOOLS || "[]");
-const RESULTS = JSON.parse(process.env.DEVIN_MCP_RESULTS || "{}");
-const rl = readline.createInterface({ input: process.stdin });
-function send(o){ process.stdout.write(JSON.stringify(o) + "\\n"); }
-rl.on("line", (line) => {
-  let m; try { m = JSON.parse(line); } catch { return; }
-  if (m.method === "initialize") {
-    send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "clientTools", version: "1.0" } } });
-  } else if (m.method === "tools/list") {
-    send({ jsonrpc: "2.0", id: m.id, result: { tools: TOOLS } });
-  } else if (m.method === "tools/call") {
-    const name = m.params?.name || "";
-    const seeded = RESULTS[name];
-    const text = seeded !== undefined
-      ? String(seeded)
-      : "(awaiting client tool_result)";
-    process.stderr.write("[client-tools] tool_call name=" + name + " seeded=" + (seeded !== undefined) + "\\n");
-    send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text }] } });
-  }
-});
-`.trimStart();
-
-function ensureClientToolsScript() {
-  const scriptPath = path.join(os.tmpdir(), "9router-devin-client-tools.mjs");
-  // Always rewrite so script upgrades land without a process restart.
-  fs.writeFileSync(scriptPath, CLIENT_TOOLS_MCP_SCRIPT);
-  return scriptPath;
-}
-
-// Map OpenAI tools ([{type:"function",function:{name,description,parameters}}])
-// to MCP tool declarations ([{name,description,inputSchema}]).
-// devin only discovers MCP tools whose name carries the `mcp_` prefix, so we
-// add it here and strip it back when bridging the call to the client.
-const MCP_TOOL_PREFIX = "mcp_";
-function toMcpToolName(name) {
-  return name.startsWith(MCP_TOOL_PREFIX) ? name : MCP_TOOL_PREFIX + name;
-}
-function fromMcpToolName(name) {
-  return name.startsWith(MCP_TOOL_PREFIX) ? name.slice(MCP_TOOL_PREFIX.length) : name;
-}
-
-function buildClientToolsMcp(tools, resultMap) {
-  const mcpTools = [];
-  for (const t of tools) {
-    if (!t) continue;
-    const f = t.function || t;
-    if (!f?.name) continue;
-    mcpTools.push({
-      name: toMcpToolName(f.name),
-      description: f.description || "",
-      inputSchema: f.parameters || f.input_schema || { type: "object", properties: {} },
-    });
-  }
-  if (!mcpTools.length) return null;
-  const env = { DEVIN_MCP_TOOLS: JSON.stringify(mcpTools) };
-  if (resultMap && Object.keys(resultMap).length) {
-    env.DEVIN_MCP_RESULTS = JSON.stringify(resultMap);
-  }
-  return {
-    command: process.execPath,
-    args: [ensureClientToolsScript()],
-    env,
-  };
-}
-
-// Extract tool_result content keyed by MCP tool name (mcp_<original>).
-// Walks messages: assistant.tool_calls id→name, role=tool tool_call_id→content.
-function extractClientToolResults(messages) {
-  const idToMcpName = new Map();
-  const results = {};
-  for (const m of messages) {
-    if (m?.role === "assistant" && Array.isArray(m.tool_calls)) {
-      for (const tc of m.tool_calls) {
-        const name = tc?.function?.name || tc?.name;
-        if (tc?.id && name) idToMcpName.set(tc.id, toMcpToolName(name));
-      }
-    }
-    // Claude-style tool_use blocks in content
-    if (m?.role === "assistant" && Array.isArray(m.content)) {
-      for (const b of m.content) {
-        if (b?.type === "tool_use" && b.id && b.name) {
-          idToMcpName.set(b.id, toMcpToolName(b.name));
-        }
-      }
-    }
-    if (m?.role === "tool" && m.tool_call_id) {
-      const mcpName = idToMcpName.get(m.tool_call_id);
-      if (mcpName) {
-        results[mcpName] =
-          typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
-      }
-    }
-    // Claude-style tool_result blocks in user content
-    if (m?.role === "user" && Array.isArray(m.content)) {
-      for (const b of m.content) {
-        if (b?.type === "tool_result" && b.tool_use_id) {
-          const mcpName = idToMcpName.get(b.tool_use_id);
-          if (mcpName) {
-            const c = b.content;
-            results[mcpName] =
-              typeof c === "string" ? c : JSON.stringify(c ?? "");
-          }
-        }
-      }
-    }
-  }
-  return results;
-}
+const DEVIN_CLIENT_TOOL_PREFIX = "mcp_";
 
 // ─── DevinCliExecutor ─────────────────────────────────────────────────────────
 
@@ -234,11 +127,22 @@ export class DevinCliExecutor extends BaseExecutor {
       }
     }
     const clientTools = Array.isArray(b.tools) ? b.tools.filter(Boolean) : [];
-    const clientToolResults = extractClientToolResults(messages);
-    const clientToolsMcp = buildClientToolsMcp(clientTools, clientToolResults);
+    const clientToolResults = extractClientToolResults(messages, {
+      prefix: DEVIN_CLIENT_TOOL_PREFIX,
+    });
+    const clientToolsMcp = buildClientToolsMcp(clientTools, clientToolResults, {
+      prefix: DEVIN_CLIENT_TOOL_PREFIX,
+      scriptFile: "9router-devin-client-tools.mjs",
+    });
     const hasClientTools = !!clientToolsMcp;
+    const knownClientTools = new Set(
+      clientToolDeclarations(clientTools, DEVIN_CLIENT_TOOL_PREFIX).map((t) => t.name)
+    );
     if (clientToolsMcp) {
-      mcpServers["clientTools"] = clientToolsMcp;
+      // devin's config.json keys the servers itself, so the ACP `name` field
+      // has no place there and is dropped rather than sent as an unknown key.
+      const { name: _bridgeName, ...bridgeServer } = clientToolsMcp;
+      mcpServers["clientTools"] = bridgeServer;
       const seeded = Object.keys(clientToolResults).length;
       log?.info?.(
         "DEVIN",
@@ -623,12 +527,11 @@ export class DevinCliExecutor extends BaseExecutor {
                 (type === "tool_call" || type === "tool_call_update")
               ) {
                 const tcId = update.toolCallId;
-                if (typeof update.title === "string" && update.title.startsWith("Calling mcp_") && /from clientTools\b/.test(update.title)) {
-                  const nameMatch = update.title.match(/^Calling (mcp_\S+)\b/);
-                  const mcpName = nameMatch ? nameMatch[1] : "";
-                  const origName = fromMcpToolName(mcpName);
-                  if (tcId && origName) pendingClientTools.set(tcId, origName);
-                }
+                // devin names the tool in `title` ("Calling mcp_x from clientTools")
+                // rather than a structured field; detectClientToolName matches the
+                // declared names against whatever text the notification carries.
+                const detected = detectClientToolName(update, knownClientTools, DEVIN_CLIENT_TOOL_PREFIX);
+                if (tcId && detected) pendingClientTools.set(tcId, detected);
                 const origName = tcId ? pendingClientTools.get(tcId) : null;
                 if (origName && update.rawInput) {
                   toolUseEmitted = true;
