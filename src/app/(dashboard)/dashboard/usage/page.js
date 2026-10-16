@@ -27,7 +27,11 @@ function UsageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const [period, setPeriod] = useState("today");
+  // 7D matches the API default (api/usage/stats and /chart both fall back to
+  // "7d"). "Today" showed an empty screen for providers that were not used in
+  // the last few hours, which read as "no statistics" rather than "no traffic
+  // yet" — "Cursor Agent (ACP)" is the case that prompted the change.
+  const [period, setPeriod] = useState("7d");
 
   const tabFromUrl = searchParams.get("tab");
   const activeTab = tabFromUrl && ["overview", "logs", "details"].includes(tabFromUrl)
