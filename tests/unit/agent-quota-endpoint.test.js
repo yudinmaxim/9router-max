@@ -100,3 +100,23 @@ describe("agent card shows the numbers the router already has", () => {
     expect(body.localUsage.promptTokens).toBeGreaterThanOrEqual(1000);
   });
 });
+
+describe("agent widget reports where the money went", () => {
+  it("splits by model and flags the ones with no tariff", async () => {
+    const { saveRequestUsage } = await import("@/lib/usageDb");
+    const ts = new Date().toISOString();
+    // One priced model and one that has no tariff — the case the operator hit:
+    // a provider total of $0.00 that meant "not priced", not "free".
+    await saveRequestUsage({
+      timestamp: ts, provider: "cursor-acp", model: "composer-2.5",
+      connectionId: undefined, apiKey: "sk-test", endpoint: "/v1/chat/completions",
+      tokens: { prompt_tokens: 5000, completion_tokens: 100 }, status: "ok",
+    });
+    const body = await (await call(await seed("cursor-acp"))).json();
+    const u = body.localUsage;
+    const unpriced = u.models.find((m) => m.model === "composer-2.5");
+    expect(unpriced.priced).toBe(false);
+    expect(unpriced.promptTokens).toBeGreaterThanOrEqual(5000);
+    expect(u.fullyPriced).toBe(false);
+  });
+});

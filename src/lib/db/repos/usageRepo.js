@@ -459,12 +459,40 @@ export async function getUsageTotalsForConnection(connectionId, provider) {
         OR (? <> '' AND COALESCE(connectionId, '') = '' AND provider = ?)`,
     [connectionId || "", connectionId || "", provider || "", provider || ""]
   );
+  // Per-model split, because a provider total can read as "$0.00" for two very
+  // different reasons: nothing was used, or everything was used on models that
+  // have no tariff. Only the split tells those apart.
+  const models = db.all(
+    `SELECT model,
+            COUNT(*) requests,
+            COALESCE(SUM(promptTokens), 0) promptTokens,
+            COALESCE(SUM(completionTokens), 0) completionTokens,
+            COALESCE(SUM(cost), 0) cost
+     FROM usageHistory
+     WHERE (connectionId IS NOT NULL AND connectionId = ? AND ? <> '')
+        OR (? <> '' AND COALESCE(connectionId, '') = '' AND provider = ?)
+     GROUP BY model
+     ORDER BY SUM(promptTokens) DESC`,
+    [connectionId || "", connectionId || "", provider || "", provider || ""]
+  ).map((m) => ({
+    model: m.model || "unknown",
+    requests: m.requests || 0,
+    promptTokens: m.promptTokens || 0,
+    completionTokens: m.completionTokens || 0,
+    cost: m.cost || 0,
+    // Tokens moved but nothing was charged → the model has no price configured.
+    priced: (m.promptTokens || 0) > 0 && (m.cost || 0) > 0,
+  }));
+
   return {
     requests: row?.requests || 0,
     promptTokens: row?.promptTokens || 0,
     completionTokens: row?.completionTokens || 0,
     cost: row?.cost || 0,
     lastUsed: row?.lastUsed || null,
+    // True when every model that carried traffic had a price.
+    fullyPriced: models.length > 0 && models.every((m) => m.priced),
+    models,
   };
 }
 

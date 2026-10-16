@@ -1345,27 +1345,55 @@ export default function ProviderLimits() {
                     <p className="mt-1.5 text-xs text-text-muted">{error}</p>
                   </div>
                 ) : quota?.localUsage ? (
-                  <div className="grid grid-cols-3 gap-2 py-4 text-center">
-                    <div>
-                      <p className="text-lg font-semibold text-text-main">
-                        {fmt(quota.localUsage.requests)}
-                      </p>
-                      <p className="text-[10px] text-text-muted">{translate("Requests")}</p>
+                  <div className="flex flex-col gap-3 py-3">
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div>
+                        <p className="text-lg font-semibold text-text-main">
+                          {fmt(quota.localUsage.requests)}
+                        </p>
+                        <p className="text-[10px] text-text-muted">{translate("Requests")}</p>
+                      </div>
+                      <div>
+                        <p className="text-lg font-semibold text-text-main">
+                          {fmt(quota.localUsage.promptTokens)}
+                        </p>
+                        <p className="text-[10px] text-text-muted">{translate("Input tokens")}</p>
+                      </div>
+                      <div>
+                        <p className="text-lg font-semibold text-text-main">
+                          {quota.localUsage.cost > 0
+                            ? `$${quota.localUsage.cost.toFixed(4)}`
+                            : "—"}
+                        </p>
+                        <p className="text-[10px] text-text-muted">{translate("Cost")}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-lg font-semibold text-text-main">
-                        {fmt(quota.localUsage.promptTokens)}
-                      </p>
-                      <p className="text-[10px] text-text-muted">{translate("Input tokens")}</p>
+
+                    <div className="flex flex-col gap-1 border-t border-black/5 pt-2 text-[11px] dark:border-white/5">
+                      {(quota.localUsage.models || []).map((m) => (
+                        <div key={m.model} className="flex items-center justify-between gap-2">
+                          <span className="min-w-0 truncate text-text-muted">
+                            {m.model}
+                            <span className="ml-1 text-text-muted/70">
+                              · {fmt(m.promptTokens + m.completionTokens)} tok
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-text-main">
+                            {m.cost > 0
+                              ? `$${m.cost.toFixed(4)}`
+                              : translate("No tariff")}
+                          </span>
+                        </div>
+                      ))}
                     </div>
-                    <div>
-                      <p className="text-lg font-semibold text-text-main">
-                        {quota.localUsage.cost > 0
-                          ? `$${quota.localUsage.cost.toFixed(4)}`
-                          : "—"}
+
+                    {!quota.localUsage.fullyPriced && (
+                      <p className="text-[10px] leading-relaxed text-text-muted">
+                        {translate(
+                          "Some models carry no price, so the total understates spend. Set one in Settings → Pricing."
+                        )}
                       </p>
-                      <p className="text-[10px] text-text-muted">{translate("Cost")}</p>
-                    </div>
+                    )}
                   </div>
                 ) : quota?.message || quota?.unsupported ? (
                   <div className="text-center py-5">

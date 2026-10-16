@@ -196,5 +196,7 @@
   "Endpoint is exposed without an API key.": "Эндпоинт открыт без API-ключа.",
   "Runs on your own subscription — the router has no upstream quota to report.": "Работает на вашей собственной подписке — у роутера нет апстрим-квоты.",
   "Requests": "Запросы",
-  "Input tokens": "Входные токены"
+  "Input tokens": "Входные токены",
+  "No tariff": "Тарифа нет",
+  "Some models carry no price, so the total understates spend. Set one in Settings → Pricing.": "У части моделей не задан тариф, поэтому итог занижен. Задайте цену в Настройках → Цены."
 }
