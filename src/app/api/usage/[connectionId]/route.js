@@ -6,7 +6,7 @@ import { getUsageForProvider } from "open-sse/services/usage.js";
 import { isUnrecoverableRefreshError } from "open-sse/services/tokenRefresh.js";
 import { getExecutor } from "open-sse/executors/index.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
-import { USAGE_APIKEY_PROVIDERS } from "@/shared/constants/providers";
+import { FREE_PROVIDERS, USAGE_APIKEY_PROVIDERS } from "@/shared/constants/providers";
 
 // Detect auth-expired messages returned by usage providers instead of throwing
 const AUTH_EXPIRED_PATTERNS = ["expired", "authentication", "unauthorized", "401", "re-authorize"];
@@ -141,6 +141,20 @@ export async function GET(request, { params }) {
     connection = await getProviderConnectionById(connectionId);
     if (!connection) {
       return Response.json({ error: "Connection not found" }, { status: 404 });
+    }
+
+    // The agent providers (cursor-acp, opencode-acp, omp-acp, codex-acp,
+    // devin-cli) drive a CLI that runs on the operator's own subscription, so
+    // there is no upstream quota to poll — they are neither OAuth nor in the
+    // api-key list and used to land in the generic refusal below, which read as
+    // a failure rather than as "nothing to report".
+    if (FREE_PROVIDERS[connection.provider]?.noAuth) {
+      return Response.json({
+        message: "Runs on your own subscription — the router has no upstream quota to report.",
+        quotas: [],
+        plan: null,
+        unsupported: true,
+      });
     }
 
     // Allow OAuth connections, plus whitelisted apikey providers (glm/minimax/kiro/...)
