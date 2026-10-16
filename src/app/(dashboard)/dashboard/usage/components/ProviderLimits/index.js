@@ -99,9 +99,8 @@ function kiroRegion(conn) {
 
 // English is the source string; translate() maps it through the locale file.
 const TIER_LABELS = [
-  ["simple", "Simple models"],
-  ["complex", "Complex models"],
-  ["grok", "Grok, weekly"],
+  ["cursorModels", "Cursor Models"],
+  ["otherModels", "Other Models"],
 ];
 
 const AGENT_QUOTA_UNSUPPORTED =
@@ -1377,12 +1376,17 @@ export default function ProviderLimits() {
 
                     <div className="flex flex-col gap-2 border-t border-black/5 pt-2 dark:border-white/5">
                       {TIER_LABELS.map(([key, label]) => {
+                        const all = Object.values(quota.localUsage.tiers || {});
                         const t = (quota.localUsage.tiers || {})[key];
-                        const max = Math.max(
-                          1,
-                          ...Object.values(quota.localUsage.tiers || {}).map((x) => x?.promptTokens || 0)
-                        );
-                        const pct = t ? Math.round(((t.promptTokens || 0) / max) * 100) : 0;
+                        // Length follows spend, matching Cursor's own view. When
+                        // no model has a tariff every total is 0 and the bars
+                        // would all collapse, so fall back to tokens — and the
+                        // per-model list below still says which ones lack a price.
+                        const useCost = all.some((x) => (x?.cost || 0) > 0);
+                        const valueOf = (x) =>
+                          x ? (useCost ? x.cost || 0 : (x.promptTokens || 0) + (x.completionTokens || 0)) : 0;
+                        const max = Math.max(1e-9, ...all.map(valueOf));
+                        const pct = t ? Math.round((valueOf(t) / max) * 100) : 0;
                         return (
                           <div key={key} className="flex flex-col gap-1">
                             <div className="flex items-center justify-between gap-2 text-[11px]">
@@ -1420,6 +1424,25 @@ export default function ProviderLimits() {
                           </span>
                         </div>
                       ))}
+                    </div>
+
+                    <div className="flex flex-col gap-1 border-t border-black/5 pt-2 text-[11px] dark:border-white/5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-text-muted">{translate("Grok, weekly")}</span>
+                        <span className="text-text-main">
+                          {quota.localUsage.grokWeekly
+                            ? `${quota.localUsage.grokWeekly.remainingPercentage ?? 0}%`
+                            : translate("No connection")}
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
+                        <div
+                          className="h-full rounded-full bg-primary transition-all"
+                          style={{
+                            width: `${quota.localUsage.grokWeekly?.remainingPercentage || 0}%`,
+                          }}
+                        />
+                      </div>
                     </div>
 
                     {!quota.localUsage.fullyPriced && (

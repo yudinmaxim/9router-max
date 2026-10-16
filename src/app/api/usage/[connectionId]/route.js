@@ -160,7 +160,10 @@ export async function GET(request, { params }) {
         plan: null,
         // Prose alone read as "no data". These are the numbers the router
         // itself recorded — the quota upstream cannot supply, but we can.
-        localUsage: await getUsageTotalsForConnection(connection.id, connection.provider),
+        localUsage: {
+          ...(await getUsageTotalsForConnection(connection.id, connection.provider)),
+          grokWeekly: null,
+        },
       });
     }
 

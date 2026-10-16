@@ -1,23 +1,22 @@
-// Model tiers for the quota bars.
+// Tiers for the quota bars, following Cursor's own spending split
+// (cursor.com/dashboard/spending):
 //
-// "Simple vs complex" has no meaning in the codebase — no provider names its
-// models that way — so the split is derived from the price we already hold for
-// each model rather than guessed from its name. A name-based rule would put
-// gemini-flash next to gpt-mini by spelling and misplace every future model.
+//   Cursor Models — Cursor's own: Composer and Cursor Grok
+//   Other Models  — every other model served through the same connection
+//   Grok, weekly  — a quota the provider reports, not a price
 //
-// The threshold is the only judgement call here: $1 per million input tokens.
-// Models at or below it are "simple", above it "complex". It is a constant and
-// not a heuristic so changing the cut is one edit, visible in the diff.
-//
-// Grok is a third bar rather than a fourth tier: its weekly allowance is a quota
-// the provider reports, not a price, so it cannot be folded into the other two.
+// The first two are an identity question, not a cost one: Cursor classifies by
+// which models are its own, so we do too. An earlier version split by price and
+// filed composer-2.5 under "simple" while gpt-5.3-codex went to "complex" —
+// which is a plausible-looking answer that matches no dashboard anyone reconciles
+// against. Grok is a third bar rather than a fourth tier because its weekly
+// allowance is not spend.
 
-export const SIMPLE_MAX_INPUT_PRICE = 1.0;
+/** Cursor's own models: Composer and Cursor Grok. */
+const CURSOR_MODEL = /^(composer|grok)/i;
 
-/** @returns {"simple"|"complex"|"unknown"} */
-export function classifyByPrice(pricing) {
-  if (!pricing || typeof pricing.input !== "number") return "unknown";
-  return pricing.input <= SIMPLE_MAX_INPUT_PRICE ? "simple" : "complex";
+export function classifyModelTier(model) {
+  return CURSOR_MODEL.test(String(model || "")) ? "cursorModels" : "otherModels";
 }
 
 export function emptyTier() {
@@ -25,21 +24,15 @@ export function emptyTier() {
 }
 
 /**
- * Roll a per-model split into the three bars.
- *
- * `grok` is recognised by name because it is not a price tier — it is a separate
- * weekly allowance — so it has to be pulled out by identity instead of by cost.
+ * Roll a per-model split into the two spending tiers. Grok usage lands in
+ * Cursor Models by definition — it is listed there explicitly upstream — and the
+ * weekly allowance is reported separately by the provider.
  */
 export function rollUpTiers(models) {
-  const tiers = { simple: emptyTier(), complex: emptyTier(), grok: emptyTier() };
+  const tiers = { cursorModels: emptyTier(), otherModels: emptyTier() };
   for (const m of models || []) {
     const name = String(m.model || "");
-    // Grok is pulled out by name first: it has a price like any other model, so
-    // classifying by cost would bury it in the "complex" bar and leave the weekly
-    // allowance permanently empty.
-    let key = /grok/i.test(name) ? "grok" : m.tier;
-    if (!key || key === "unknown") key = "simple";
-    const bucket = tiers[key] || tiers.simple;
+    const bucket = tiers[classifyModelTier(name)];
     bucket.requests += m.requests || 0;
     bucket.promptTokens += m.promptTokens || 0;
     bucket.completionTokens += m.completionTokens || 0;

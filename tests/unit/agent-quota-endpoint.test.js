@@ -128,12 +128,13 @@ describe("tier split behind the three bars", () => {
     db.run("DELETE FROM usageDaily");
   });
 
-  it("separates simple from complex by price, not by model name", async () => {
+  it("follows Cursor's split: Composer and Cursor Grok vs the rest", async () => {
     const { saveRequestUsage } = await import("@/lib/usageDb");
     const ts = new Date().toISOString();
-    // gpt-5.3-codex is $1.75/M input, claude-opus-5-5 is $4.00/M — both above
-    // the $1 threshold, so both are "complex" even though one starts "gpt" and
-    // the other "claude". A name-based rule would split them.
+    // cursor.com/dashboard/spending splits "Cursor Models" (Composer + Cursor
+    // Grok) from "Other Models". This is an identity question, not a cost one:
+    // gpt-5.3-codex ($1.75/M) is cheaper than claude-opus-5-5 ($4/M) yet both
+    // are "other", and a price-based rule would have split them.
     await saveRequestUsage({
       timestamp: ts, provider: "cursor-acp", model: "gpt-5.3-codex",
       connectionId: undefined, apiKey: "sk-test", endpoint: "/v1/chat/completions",
@@ -145,11 +146,23 @@ describe("tier split behind the three bars", () => {
       tokens: { prompt_tokens: 800, completion_tokens: 20 }, status: "ok",
     });
     const { tiers } = (await (await call(await seed("cursor-acp"))).json()).localUsage;
-    expect(tiers.complex.requests).toBeGreaterThanOrEqual(2);
-    expect(tiers.simple.requests).toBe(0);
+    expect(tiers.otherModels.requests).toBe(2);
+    expect(tiers.cursorModels.requests).toBe(0);
   });
 
-  it("puts grok in its own bar regardless of price", async () => {
+  it("counts composer under Cursor Models", async () => {
+    const { saveRequestUsage } = await import("@/lib/usageDb");
+    await saveRequestUsage({
+      timestamp: new Date().toISOString(), provider: "cursor-acp", model: "composer-2.5",
+      connectionId: undefined, apiKey: "sk-test", endpoint: "/v1/chat/completions",
+      tokens: { prompt_tokens: 700, completion_tokens: 10 }, status: "ok",
+    });
+    const { tiers } = (await (await call(await seed("cursor-acp"))).json()).localUsage;
+    expect(tiers.cursorModels.requests).toBe(1);
+    expect(tiers.cursorModels.models).toContain("composer-2.5");
+  });
+
+  it("keeps Cursor Grok inside Cursor Models, not a bar of its own", async () => {
     const { saveRequestUsage } = await import("@/lib/usageDb");
     await saveRequestUsage({
       timestamp: new Date().toISOString(), provider: "cursor-acp", model: "grok-4.6",
@@ -157,6 +170,11 @@ describe("tier split behind the three bars", () => {
       tokens: { prompt_tokens: 300, completion_tokens: 10 }, status: "ok",
     });
     const { tiers } = (await (await call(await seed("cursor-acp"))).json()).localUsage;
-    expect(tiers.grok.requests).toBeGreaterThanOrEqual(1);
+    // Listed as part of Cursor Models upstream, and the weekly allowance is a
+    // separate quota reported by the provider — not a usage tier.
+    expect(tiers.cursorModels.requests).toBeGreaterThanOrEqual(1);
+    expect(tiers.cursorModels.models).toContain("grok-4.6");
+    expect(tiers.otherModels.requests).toBe(0);
+    expect(Object.keys(tiers).sort()).toEqual(["cursorModels", "otherModels"]);
   });
 });

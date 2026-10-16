@@ -2,7 +2,7 @@ import { EventEmitter } from "events";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
-import { classifyByPrice, rollUpTiers } from "@/lib/quotaTiers";
+import { classifyModelTier, rollUpTiers } from "@/lib/quotaTiers";
 import { getMeta, setMeta } from "../helpers/metaStore.js";
 
 function maskApiKey(key) {
@@ -490,7 +490,7 @@ export async function getUsageTotalsForConnection(connectionId, provider) {
       completionTokens: m.completionTokens || 0,
       cost: m.cost || 0,
       inputPrice: pricing?.input ?? null,
-      tier: classifyByPrice(pricing),
+      tier: classifyModelTier(model),
       // Tokens moved but nothing was charged → the model has no price configured.
       priced: (m.promptTokens || 0) > 0 && (m.cost || 0) > 0,
     });
@@ -506,6 +506,9 @@ export async function getUsageTotalsForConnection(connectionId, provider) {
     fullyPriced: models.length > 0 && models.every((m) => m.priced),
     models,
     tiers: rollUpTiers(models),
+    // The weekly Grok allowance is a provider quota, not spend: it arrives with
+    // the quota payload, so it is absent whenever no grok-cli connection exists.
+    grokWeekly: null,
   };
 }
 
