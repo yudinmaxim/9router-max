@@ -148,12 +148,15 @@ export async function GET(request, { params }) {
     // there is no upstream quota to poll — they are neither OAuth nor in the
     // api-key list and used to land in the generic refusal below, which read as
     // a failure rather than as "nothing to report".
+    //
+    // Only a reason code is returned: the wording belongs to the dashboard, which
+    // is localized. An English sentence from here would show up untranslated in
+    // every other locale.
     if (FREE_PROVIDERS[connection.provider]?.noAuth) {
       return Response.json({
-        message: "Runs on your own subscription — the router has no upstream quota to report.",
+        unsupported: "own-subscription",
         quotas: [],
         plan: null,
-        unsupported: true,
       });
     }
 

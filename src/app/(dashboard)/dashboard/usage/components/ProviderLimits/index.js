@@ -6,6 +6,7 @@ import ProviderIcon from "@/shared/components/ProviderIcon";
 import QuotaTable from "./QuotaTable";
 import Toggle from "@/shared/components/Toggle";
 import Tooltip from "@/shared/components/Tooltip";
+import { translate } from "@/i18n/runtime";
 import {
   parseQuotaData,
   calculatePercentage,
@@ -94,6 +95,10 @@ function kiroRegion(conn) {
   const seg = typeof arn === "string" ? arn.split(":")[3] : "";
   return seg || "";
 }
+
+// English is the source string; translate() maps it through the locale file.
+const AGENT_QUOTA_UNSUPPORTED =
+  "Runs on your own subscription \u2014 the router has no upstream quota to report.";
 
 function getCodexResetCreditCount(quota) {
   const value = quota?.raw?.resetCredits?.availableCount;
@@ -320,6 +325,7 @@ export default function ProviderLimits() {
         quotas: parsedQuotas,
         plan: data.plan || null,
         message: data.message || null,
+        unsupported: data.unsupported || null,
         raw: data,
       };
 
@@ -1336,9 +1342,13 @@ export default function ProviderLimits() {
                     </span>
                     <p className="mt-1.5 text-xs text-text-muted">{error}</p>
                   </div>
-                ) : quota?.message ? (
+                ) : quota?.message || quota?.unsupported ? (
                   <div className="text-center py-5">
-                    <p className="text-xs text-text-muted">{quota.message}</p>
+                    <p className="text-xs text-text-muted">
+                      {quota.unsupported === "own-subscription"
+                        ? translate(AGENT_QUOTA_UNSUPPORTED)
+                        : quota.message}
+                    </p>
                   </div>
                 ) : (
                   <QuotaTable
@@ -1351,9 +1361,9 @@ export default function ProviderLimits() {
                     onHideQuota={(quotaRow) => handleHideQuota(conn.provider, quotaRow)}
                   />
                 )}
-                {quota?.message && !error && !isLoading && (
+                {quota?.unsupported === "own-subscription" && !error && !isLoading && (
                   <p className="mt-2 px-1 text-[10px] leading-relaxed text-text-muted">
-                    {quota.message}
+                    {translate(AGENT_QUOTA_UNSUPPORTED)}
                   </p>
                 )}
                 {hiddenQuotaRows.length > 0 && (

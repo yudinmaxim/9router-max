@@ -34,15 +34,21 @@ beforeEach(async () => {
 });
 
 describe("agent provider quota", () => {
-  it.each(AGENTS)("explains itself for %s instead of refusing", async (provider) => {
+  it.each(AGENTS)("flags %s as own-subscription instead of refusing", async (provider) => {
     const id = await seed(provider);
     const res = await call(id);
     const body = await res.json();
-    expect(body.unsupported).toBe(true);
+    expect(body.unsupported).toBe("own-subscription");
     expect(body.quotas).toEqual([]);
-    expect(body.message).toMatch(/own subscription/i);
-    // The old wording is what the operator was shown and must be gone.
-    expect(body.message).not.toMatch(/not available/i);
+  });
+
+  it.each(AGENTS)("sends only machine fields for %s, no prose", async (provider) => {
+    // The wording belongs to the dashboard, which is localized — an English
+    // sentence from the API shows up untranslated in every other locale. The
+    // reason code itself is fine; it is not text anyone reads.
+    const body = await (await call(await seed(provider))).json();
+    expect(body.message ?? null).toBeNull();
+    expect(Object.keys(body).sort()).toEqual(["plan", "quotas", "unsupported"]);
   });
 
   it("answers 200, so the card renders instead of erroring", async () => {
@@ -63,7 +69,7 @@ describe("agent provider quota", () => {
     const body = await (await call(await seed(queryable))).json();
     // These providers get a real upstream call; whatever it returns, it must not
     // be the agent explanation.
-    expect(body.message).not.toMatch(/own subscription/i);
+    expect(JSON.stringify(body)).not.toMatch(/own-subscription/);
     expect(body.unsupported).toBeUndefined();
   });
 
