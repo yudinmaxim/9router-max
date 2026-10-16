@@ -717,6 +717,29 @@ export function parseQuotaData(provider, data) {
         }
         break;
 
+      case "cursor":
+      case "cursor-acp":
+        // Cursor's own plan bars: Total / API / Auto (Composer) as 0-100
+        // percent, plus the included and bonus credit balances. getCursorUsage
+        // builds these already normalised, so pass them through untouched —
+        // they were the reference for how the spend fields are NOT summed.
+        if (data.quotas) {
+          Object.entries(data.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: quota.used || 0,
+              total: quota.total || 0,
+              resetAt: quota.resetAt || null,
+              remaining: quota.remaining,
+              remainingPercentage: quota.remainingPercentage,
+              unlimited: quota.unlimited,
+              isCreditBalance: quota.isCreditBalance,
+              currency: quota.currency,
+            });
+          });
+        }
+        break;
+
       case "zed":
         // Edit predictions + optional hosted model_requests; unlimited uses remainingPercentage.
         if (data.quotas) {

@@ -16,6 +16,9 @@ vi.mock("next/server", () => ({ NextResponse: { json: (b, i) => Response.json(b,
 const { createProviderConnection } = await import("@/models");
 const { runMigrationOnce } = await import("@/lib/db/migrate");
 const { rollUpTiers, computeTierShares } = await import("@/lib/quotaTiers");
+const { parseQuotaData } = await import(
+  "@/app/(dashboard)/dashboard/usage/components/ProviderLimits/utils"
+);
 const { getAdapter } = await import("@/lib/db/driver");
 const { GET } = await import("@/app/api/usage/[connectionId]/route");
 const { USAGE_APIKEY_PROVIDERS } = await import("@/shared/constants/providers");
@@ -267,5 +270,31 @@ describe("bar percentages", () => {
     expect(shares.a.pct).toBe(100);
     expect(shares.a.hasTraffic).toBe(true);
     expect(shares.b.hasTraffic).toBe(false);
+  });
+});
+
+describe("Cursor plan bars reach the card", () => {
+  it("parses the percent bars Cursor reports", async () => {
+    // Shape produced by getCursorUsage: 0-100 percent bars plus credit balances.
+    const quotas = parseQuotaData("cursor-acp", {
+      quotas: {
+        "Total usage": { used: 13.99, total: 100, remaining: 86.01, remainingPercentage: 86.01, resetAt: "2026-11-15T18:17:57.000Z", unlimited: false },
+        "API usage": { used: 14.22, total: 100, remaining: 85.78, remainingPercentage: 85.78, resetAt: null, unlimited: false },
+        "Auto (Composer) usage": { used: 13.98, total: 100, remaining: 86.02, remainingPercentage: 86.02, resetAt: null, unlimited: false },
+        "Included credit": { used: 20, total: 20, remainingPercentage: 0, resetAt: null, unlimited: true, isCreditBalance: true, currency: "USD" },
+      },
+    });
+    expect(quotas.map((q) => q.name)).toEqual([
+      "Total usage", "API usage", "Auto (Composer) usage", "Included credit",
+    ]);
+    const total = quotas[0];
+    expect(total.used).toBeCloseTo(13.99);
+    expect(total.total).toBe(100);
+    expect(total.remainingPercentage).toBeCloseTo(86.01);
+    expect(quotas[3].isCreditBalance).toBe(true);
+  });
+
+  it("returns nothing for a provider with no bars", () => {
+    expect(parseQuotaData("cursor-acp", {})).toEqual([]);
   });
 });
