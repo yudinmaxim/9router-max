@@ -41,3 +41,29 @@ export function rollUpTiers(models) {
   }
   return tiers;
 }
+
+/**
+ * Share of spend per tier, plus the basis the numbers are drawn on.
+ *
+ * Shares of the total, not of the largest tier: a share-of-max would print 100%
+ * for somebody on every dataset, which is the one thing a percentage must not do.
+ *
+ * When no model carries a tariff every total is 0 and a percentage of 0 is
+ * meaningless, so the basis falls back to tokens. `useCost` is returned so the
+ * caller can say which basis it is showing rather than implying it is spend.
+ */
+export function computeTierShares(tiers) {
+  const all = Object.values(tiers || {});
+  const useCost = all.some((x) => (x?.cost || 0) > 0);
+  const valueOf = (x) =>
+    x ? (useCost ? x.cost || 0 : (x.promptTokens || 0) + (x.completionTokens || 0)) : 0;
+  const total = all.reduce((sum, x) => sum + valueOf(x), 0);
+  const shares = {};
+  for (const [key, tier] of Object.entries(tiers || {})) {
+    shares[key] = {
+      pct: total > 0 ? Math.round((valueOf(tier) / total) * 100) : 0,
+      hasTraffic: Boolean(tier && tier.requests > 0),
+    };
+  }
+  return { shares, useCost };
+}

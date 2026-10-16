@@ -15,6 +15,7 @@ vi.mock("next/server", () => ({ NextResponse: { json: (b, i) => Response.json(b,
 
 const { createProviderConnection } = await import("@/models");
 const { runMigrationOnce } = await import("@/lib/db/migrate");
+const { rollUpTiers, computeTierShares } = await import("@/lib/quotaTiers");
 const { getAdapter } = await import("@/lib/db/driver");
 const { GET } = await import("@/app/api/usage/[connectionId]/route");
 const { USAGE_APIKEY_PROVIDERS } = await import("@/shared/constants/providers");
@@ -176,5 +177,68 @@ describe("tier split behind the three bars", () => {
     expect(tiers.cursorModels.models).toContain("grok-4.6");
     expect(tiers.otherModels.requests).toBe(0);
     expect(Object.keys(tiers).sort()).toEqual(["cursorModels", "otherModels"]);
+  });
+});
+
+describe("bar percentages", () => {
+  it("split the total the way Cursor's dashboard does", () => {
+    // The arithmetic the card depends on: shares of the total, not of the
+    // largest bar — which would print 100% for somebody no matter what.
+    const tiers = rollUpTiers([
+      { model: "composer-2.5", requests: 10, promptTokens: 900, completionTokens: 100, cost: 0 },
+      { model: "gpt-5.3-codex", requests: 2, promptTokens: 100, completionTokens: 10, cost: 1.0 },
+      { model: "claude-opus-5-5", requests: 1, promptTokens: 50, completionTokens: 5, cost: 1.0 },
+    ]);
+    const total = tiers.cursorModels.cost + tiers.otherModels.cost;
+    expect(total).toBeCloseTo(2.0);
+    expect(Math.round((tiers.otherModels.cost / total) * 100)).toBe(100);
+    expect(Math.round((tiers.cursorModels.cost / total) * 100)).toBe(0);
+    // Composer traffic is real even though it carries no money yet.
+    expect(tiers.cursorModels.requests).toBe(10);
+  });
+
+  it("reads as 50/50 when spend is even, like the 14%/14% example", () => {
+    const tiers = rollUpTiers([
+      { model: "composer-2.5", requests: 1, promptTokens: 1, completionTokens: 1, cost: 0.5 },
+      { model: "gpt-5.3-codex", requests: 1, promptTokens: 1, completionTokens: 1, cost: 0.5 },
+    ]);
+    const { shares } = computeTierShares(tiers);
+    expect(shares.cursorModels.pct).toBe(50);
+    expect(shares.otherModels.pct).toBe(50);
+  });
+
+  it("never prints 100% for somebody — shares are of the total", () => {
+    // The distinguishing case is three tiers: a share-of-largest would also give
+    // 100/0 for two, but three must sum to 100 and the middle one to 50.
+    const { shares } = computeTierShares({
+      a: { requests: 5, promptTokens: 500, completionTokens: 0, cost: 0.25 },
+      b: { requests: 3, promptTokens: 300, completionTokens: 0, cost: 0.5 },
+      c: { requests: 2, promptTokens: 200, completionTokens: 0, cost: 0.25 },
+    });
+    expect(shares.a.pct + shares.b.pct + shares.c.pct).toBe(100);
+    expect(shares.b.pct).toBe(50);
+  });
+
+  it("falls back to tokens when nothing has a tariff, and says so", () => {
+    const { shares, useCost } = computeTierShares({
+      a: { requests: 5, promptTokens: 900, completionTokens: 100, cost: 0 },
+      b: { requests: 5, promptTokens: 100, completionTokens: 0, cost: 0 },
+    });
+    expect(useCost).toBe(false);
+    // 1000 of 1100 tokens — prompt and completion both count.
+    expect(shares.a.pct).toBe(91);
+    expect(shares.b.pct).toBe(9);
+  });
+
+  it("marks a tier with traffic even at 0%", () => {
+    const { shares } = computeTierShares({
+      a: { requests: 5, promptTokens: 900, completionTokens: 0, cost: 0 },
+      b: { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0 },
+    });
+    // Composer traffic is real while it carries no money; an empty bar would
+    // read as "not used" and hide the only tier that has volume.
+    expect(shares.a.pct).toBe(100);
+    expect(shares.a.hasTraffic).toBe(true);
+    expect(shares.b.hasTraffic).toBe(false);
   });
 });

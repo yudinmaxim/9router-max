@@ -8,6 +8,7 @@ import { fmt } from "../UsageTable";
 import Toggle from "@/shared/components/Toggle";
 import Tooltip from "@/shared/components/Tooltip";
 import { translate } from "@/i18n/runtime";
+import { computeTierShares } from "@/lib/quotaTiers";
 import {
   parseQuotaData,
   calculatePercentage,
@@ -99,7 +100,7 @@ function kiroRegion(conn) {
 
 // English is the source string; translate() maps it through the locale file.
 const TIER_LABELS = [
-  ["cursorModels", "Cursor Models"],
+  ["cursorModels", "Cursor Models", "Includes Cursor Grok and Composer"],
   ["otherModels", "Other Models"],
 ];
 
@@ -1132,6 +1133,11 @@ export default function ProviderLimits() {
           const rawQuotas = quota?.quotas || [];
           const visibleQuotas = filterQuotasByVisibility(conn.provider, rawQuotas, quotaVisibility);
           const hiddenQuotaRows = getHiddenQuotaRows(conn.provider, rawQuotas, quotaVisibility);
+          // Percentages are shares of the total spend, computed once per card
+          // rather than inside the row so every bar is measured against the same
+          // denominator.
+          const shareData = computeTierShares(quota?.localUsage?.tiers);
+          const shareOf = (key) => shareData.shares[key] || { pct: 0, hasTraffic: false };
 
           return (
             <Card
@@ -1375,34 +1381,35 @@ export default function ProviderLimits() {
                     </div>
 
                     <div className="flex flex-col gap-2 border-t border-black/5 pt-2 dark:border-white/5">
-                      {TIER_LABELS.map(([key, label]) => {
-                        const all = Object.values(quota.localUsage.tiers || {});
+                      {TIER_LABELS.map(([key, label, hint]) => {
                         const t = (quota.localUsage.tiers || {})[key];
-                        // Length follows spend, matching Cursor's own view. When
-                        // no model has a tariff every total is 0 and the bars
-                        // would all collapse, so fall back to tokens — and the
-                        // per-model list below still says which ones lack a price.
-                        const useCost = all.some((x) => (x?.cost || 0) > 0);
-                        const valueOf = (x) =>
-                          x ? (useCost ? x.cost || 0 : (x.promptTokens || 0) + (x.completionTokens || 0)) : 0;
-                        const max = Math.max(1e-9, ...all.map(valueOf));
-                        const pct = t ? Math.round((valueOf(t) / max) * 100) : 0;
+                        const { pct, hasTraffic } = shareOf(key);
                         return (
                           <div key={key} className="flex flex-col gap-1">
-                            <div className="flex items-center justify-between gap-2 text-[11px]">
-                              <span className="text-text-muted">{translate(label)}</span>
-                              <span className="text-text-main">
-                                {t && t.requests > 0
-                                  ? `${fmt(t.promptTokens + t.completionTokens)} tok · $${t.cost.toFixed(4)}`
-                                  : translate("No data")}
+                            <div className="flex items-start justify-between gap-2 text-[11px]">
+                              <span className="min-w-0 text-text-muted">
+                                {translate(label)}
+                                {hint ? (
+                                  <span className="ml-1 text-text-muted/70">
+                                    · {translate(hint)}
+                                  </span>
+                                ) : null}
+                              </span>
+                              <span className="shrink-0 text-sm font-semibold text-text-main">
+                                {hasTraffic ? `${pct}%` : translate("No data")}
                               </span>
                             </div>
                             <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
                               <div
                                 className="h-full rounded-full bg-primary transition-all"
-                                style={{ width: `${Math.max(pct, t && t.requests > 0 ? 2 : 0)}%` }}
+                                style={{ width: `${hasTraffic ? Math.max(pct, 2) : 0}%` }}
                               />
                             </div>
+                            {hasTraffic ? (
+                              <span className="text-[10px] text-text-muted/70">
+                                {fmt(t.promptTokens + t.completionTokens)} tok · ${t.cost.toFixed(4)}
+                              </span>
+                            ) : null}
                           </div>
                         );
                       })}
@@ -1429,7 +1436,7 @@ export default function ProviderLimits() {
                     <div className="flex flex-col gap-1 border-t border-black/5 pt-2 text-[11px] dark:border-white/5">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-text-muted">{translate("Grok, weekly")}</span>
-                        <span className="text-text-main">
+                        <span className="shrink-0 text-sm font-semibold text-text-main">
                           {quota.localUsage.grokWeekly
                             ? `${quota.localUsage.grokWeekly.remainingPercentage ?? 0}%`
                             : translate("No connection")}

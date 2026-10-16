@@ -203,5 +203,6 @@
   "No data": "нет данных",
   "Cursor Models": "Модели Cursor",
   "Other Models": "Другие модели",
-  "No connection": "нет подключения"
+  "No connection": "нет подключения",
+  "Includes Cursor Grok and Composer": "Включает Cursor Grok и Composer"
 }
