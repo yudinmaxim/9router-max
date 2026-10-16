@@ -153,10 +153,14 @@ export async function GET(request, { params }) {
     // is localized. An English sentence from here would show up untranslated in
     // every other locale.
     if (FREE_PROVIDERS[connection.provider]?.noAuth) {
+      const { getUsageTotalsForConnection } = await import("@/lib/localDb");
       return Response.json({
         unsupported: "own-subscription",
         quotas: [],
         plan: null,
+        // Prose alone read as "no data". These are the numbers the router
+        // itself recorded — the quota upstream cannot supply, but we can.
+        localUsage: await getUsageTotalsForConnection(connection.id, connection.provider),
       });
     }
 

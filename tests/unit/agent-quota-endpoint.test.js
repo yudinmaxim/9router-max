@@ -48,7 +48,9 @@ describe("agent provider quota", () => {
     // reason code itself is fine; it is not text anyone reads.
     const body = await (await call(await seed(provider))).json();
     expect(body.message ?? null).toBeNull();
-    expect(Object.keys(body).sort()).toEqual(["plan", "quotas", "unsupported"]);
+    // localUsage is numbers only — it must not smuggle in a user-facing string.
+    expect(Object.keys(body).sort()).toEqual(["localUsage", "plan", "quotas", "unsupported"]);
+    expect(Object.values(body.localUsage).every((v) => typeof v !== "string" || v === null || v.match(/^\d/))).toBe(true);
   });
 
   it("answers 200, so the card renders instead of erroring", async () => {
@@ -75,5 +77,26 @@ describe("agent provider quota", () => {
 
   it("404s for an unknown connection", async () => {
     expect((await call("nope")).status).toBe(404);
+  });
+});
+describe("agent card shows the numbers the router already has", () => {
+  it("returns our own totals alongside the unsupported flag", async () => {
+    const { saveRequestUsage } = await import("@/lib/usageDb");
+    await saveRequestUsage({
+      timestamp: new Date().toISOString(),
+      provider: "cursor-acp",
+      model: "composer-2.5",
+      connectionId: undefined,
+      apiKey: "sk-test",
+      endpoint: "/v1/chat/completions",
+      tokens: { prompt_tokens: 1000, completion_tokens: 50 },
+      status: "ok",
+    });
+    const body = await (await call(await seed("cursor-acp"))).json();
+    expect(body.unsupported).toBe("own-subscription");
+    // The quota upstream cannot answer for an agent, but the router's own
+    // history can — returning prose alone read as "no data".
+    expect(body.localUsage.requests).toBeGreaterThanOrEqual(1);
+    expect(body.localUsage.promptTokens).toBeGreaterThanOrEqual(1000);
   });
 });

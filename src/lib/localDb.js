@@ -13,6 +13,7 @@ export {
   getMcpServers, getMcpServerById,
   createMcpServer, updateMcpServer, deleteMcpServer,
   setMcpServerTestStatus, resolveMcpServerForProxy,
+  getUsageTotalsForConnection,
   getApiKeys, getApiKeyById, getApiKeyByKey, createApiKey, updateApiKey, deleteApiKey, validateApiKey,
   getCombos, getComboById, getComboByName,
   createCombo, updateCombo, deleteCombo,

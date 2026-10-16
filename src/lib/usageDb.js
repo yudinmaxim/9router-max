@@ -2,7 +2,8 @@
 export {
   statsEmitter, trackPendingRequest, getActiveRequests,
   saveRequestUsage, getUsageHistory, getUsageStats, getChartData,
-  backfillDailyAccounts, PROVIDER_ACCOUNT_PREFIX, isProviderAccountKey,
+  backfillDailyAccounts,  getUsageTotalsForConnection,
+ PROVIDER_ACCOUNT_PREFIX, isProviderAccountKey,
   appendRequestLog, getRecentLogs,
   saveRequestDetail, getRequestDetails, getRequestDetailById,
 } from "@/lib/db/index.js";

@@ -435,6 +435,39 @@ export async function backfillDailyAccounts(dateKeys) {
   return { days: keys.length, added };
 }
 
+/**
+ * What the router itself recorded for one connection.
+ *
+ * The quota page asks the upstream for limits, which agent providers cannot
+ * answer, and previously answered with prose alone — hiding the numbers the
+ * router already had. This is those numbers.
+ *
+ * Matches on connectionId when the caller has one and falls back to the provider
+ * for noAuth requests, which are stored with a synthetic id (see
+ * aggregateEntryToDay).
+ */
+export async function getUsageTotalsForConnection(connectionId, provider) {
+  const db = await getAdapter();
+  const row = db.get(
+    `SELECT COUNT(*) requests,
+            COALESCE(SUM(promptTokens), 0) promptTokens,
+            COALESCE(SUM(completionTokens), 0) completionTokens,
+            COALESCE(SUM(cost), 0) cost,
+            MAX(timestamp) lastUsed
+     FROM usageHistory
+     WHERE (connectionId IS NOT NULL AND connectionId = ? AND ? <> '')
+        OR (? <> '' AND COALESCE(connectionId, '') = '' AND provider = ?)`,
+    [connectionId || "", connectionId || "", provider || "", provider || ""]
+  );
+  return {
+    requests: row?.requests || 0,
+    promptTokens: row?.promptTokens || 0,
+    completionTokens: row?.completionTokens || 0,
+    cost: row?.cost || 0,
+    lastUsed: row?.lastUsed || null,
+  };
+}
+
 export async function getUsageStats(period = "all") {
   const db = await getAdapter();
 

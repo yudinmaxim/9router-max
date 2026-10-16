@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import QuotaTable from "./QuotaTable";
+import { fmt } from "../UsageTable";
 import Toggle from "@/shared/components/Toggle";
 import Tooltip from "@/shared/components/Tooltip";
 import { translate } from "@/i18n/runtime";
@@ -326,6 +327,7 @@ export default function ProviderLimits() {
         plan: data.plan || null,
         message: data.message || null,
         unsupported: data.unsupported || null,
+        localUsage: data.localUsage || null,
         raw: data,
       };
 
@@ -1341,6 +1343,29 @@ export default function ProviderLimits() {
                       error
                     </span>
                     <p className="mt-1.5 text-xs text-text-muted">{error}</p>
+                  </div>
+                ) : quota?.localUsage ? (
+                  <div className="grid grid-cols-3 gap-2 py-4 text-center">
+                    <div>
+                      <p className="text-lg font-semibold text-text-main">
+                        {fmt(quota.localUsage.requests)}
+                      </p>
+                      <p className="text-[10px] text-text-muted">{translate("Requests")}</p>
+                    </div>
+                    <div>
+                      <p className="text-lg font-semibold text-text-main">
+                        {fmt(quota.localUsage.promptTokens)}
+                      </p>
+                      <p className="text-[10px] text-text-muted">{translate("Input tokens")}</p>
+                    </div>
+                    <div>
+                      <p className="text-lg font-semibold text-text-main">
+                        {quota.localUsage.cost > 0
+                          ? `$${quota.localUsage.cost.toFixed(4)}`
+                          : "—"}
+                      </p>
+                      <p className="text-[10px] text-text-muted">{translate("Cost")}</p>
+                    </div>
                   </div>
                 ) : quota?.message || quota?.unsupported ? (
                   <div className="text-center py-5">
