@@ -15,6 +15,10 @@ export default {
     },
   },
   category: "free",
+  // Without this the provider is absent from USAGE_SUPPORTED_PROVIDERS,
+  // so /api/providers/client filtered its connection out of the usage
+  // page — the agent was serving traffic while showing nothing there.
+  features: { usage: true },
   authType: "none",
   noAuth: true,
   authModes: ["none"],
