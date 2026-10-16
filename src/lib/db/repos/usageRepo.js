@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { getMeta, setMeta } from "../helpers/metaStore.js";
 
 function maskApiKey(key) {
@@ -61,6 +62,26 @@ function addToCounter(target, key, values) {
   if (values.meta) Object.assign(target[key], values.meta);
 }
 
+/** byAccount key for requests that carry no connection row (see below). */
+export const PROVIDER_ACCOUNT_PREFIX = "provider:";
+
+/**
+ * True when a byAccount key stands for a provider rather than a connection.
+ * Exported so the display side and the backfill agree on the shape.
+ */
+/**
+ * Human-readable provider name for a bucket id. Falls back to the id itself,
+ * which is what the registry calls it anyway — the ACP providers carry no
+ * separate display name in shared/constants/providers.
+ */
+function providerLabel(providerId) {
+  return AI_PROVIDERS[providerId]?.name || providerId;
+}
+
+export function isProviderAccountKey(key) {
+  return typeof key === "string" && key.startsWith(PROVIDER_ACCOUNT_PREFIX);
+}
+
 function aggregateEntryToDay(day, entry) {
   const promptTokens = entry.tokens?.prompt_tokens || entry.tokens?.input_tokens || 0;
   const completionTokens = entry.tokens?.completion_tokens || entry.tokens?.output_tokens || 0;
@@ -87,6 +108,14 @@ function aggregateEntryToDay(day, entry) {
 
   if (entry.connectionId) {
     addToCounter(day.byAccount, entry.connectionId, { ...vals, meta: { rawModel: entry.model, provider: entry.provider } });
+  } else if (entry.provider) {
+    // Providers that need no credentials (cursor-acp, opencode-acp, opencode)
+    // are handed a synthetic connection id that has no row behind it, so nothing
+    // to attribute to — and the old code dropped those requests from byAccount
+    // entirely, which is why "Cursor Agent (ACP)" had no per-account statistics
+    // at all even though byProvider was populated. Key them by provider instead
+    // so every request stays visible, and let getUsageStats name the bucket.
+    addToCounter(day.byAccount, PROVIDER_ACCOUNT_PREFIX + entry.provider, { ...vals, meta: { rawModel: entry.model, provider: entry.provider } });
   }
 
   const apiKeyVal = entry.apiKey && typeof entry.apiKey === "string" ? entry.apiKey : "local-no-key";
@@ -344,6 +373,68 @@ function loadDaysInRange(adapter, maxDays) {
   return adapter.all(`SELECT dateKey, data FROM usageDaily WHERE dateKey >= ? ORDER BY dateKey ASC`, [cutoffKey]);
 }
 
+/**
+ * Rebuild usageDaily.byAccount from usageHistory for the given days.
+ *
+ * byAccount used to skip requests with no connectionId, and every noAuth
+ * provider (cursor-acp, opencode-acp, opencode) is handed a synthetic id with
+ * no row behind it — so 1215 historical requests vanished from the per-account
+ * statistics while byProvider still counted them. usageHistory kept every row,
+ * so the buckets can be rebuilt rather than lost.
+ *
+ * byAccount is replaced wholesale rather than merged: the correct value is
+ * derivable from the history, and adding to a stale bucket would double-count.
+ * Other per-day counters are left untouched.
+ *
+ * @returns {Promise<{days:number, added:number}>}
+ */
+export async function backfillDailyAccounts(dateKeys) {
+  const db = await getAdapter();
+  const keys = Array.isArray(dateKeys) && dateKeys.length
+    ? dateKeys
+    : db.all(`SELECT dateKey FROM usageDaily ORDER BY dateKey`).map((r) => r.dateKey);
+  if (!keys.length) return { days: 0, added: 0 };
+
+  let added = 0;
+  db.transaction(() => {
+    for (const dateKey of keys) {
+      const rows = db.all(
+        `SELECT provider, model, connectionId, promptTokens, completionTokens, cost, tokens
+         FROM usageHistory WHERE substr(timestamp, 1, 10) = ?`,
+        [dateKey]
+      );
+      if (!rows.length) continue;
+
+      const byAccount = {};
+      for (const r of rows) {
+        const tokens = parseJson(r.tokens, {}) || {};
+        const vals = {
+          promptTokens: r.promptTokens || tokens.prompt_tokens || 0,
+          completionTokens: r.completionTokens || tokens.completion_tokens || 0,
+          cachedTokens: tokens.cached_tokens || tokens.cache_read_input_tokens || 0,
+          cost: r.cost || 0,
+        };
+        const key = r.connectionId
+          || (r.provider ? PROVIDER_ACCOUNT_PREFIX + r.provider : null);
+        if (!key) continue;
+        addToCounter(byAccount, key, {
+          ...vals,
+          meta: { rawModel: r.model, provider: r.provider },
+        });
+        added++;
+      }
+
+      const dayRow = db.get(`SELECT data FROM usageDaily WHERE dateKey = ?`, [dateKey]);
+      if (!dayRow) continue;
+      const day = parseJson(dayRow.data, {});
+      day.byAccount = byAccount;
+      db.run(`UPDATE usageDaily SET data = ? WHERE dateKey = ?`, [stringifyJson(day), dateKey]);
+    }
+  });
+
+  return { days: keys.length, added };
+}
+
 export async function getUsageStats(period = "all") {
   const db = await getAdapter();
 
@@ -485,10 +576,24 @@ export async function getUsageStats(period = "all") {
       }
 
       for (const [connId, a] of Object.entries(day.byAccount || {})) {
-        const accountName = connectionMap[connId] || `Account ${connId.slice(0, 8)}...`;
         const rawModel = a.rawModel || "";
         const provider = a.provider || "";
         const providerDisplayName = providerNodeNameMap[provider] || provider;
+        // A provider-scoped bucket has no connection row behind it, so the id
+        // itself would render as "Account curs…". Name it after the provider,
+        // preferring the connection row of the same name when the provider has
+        // exactly one — that is how "Cursor Agent (ACP)" shows up as itself.
+        let accountName;
+        if (isProviderAccountKey(connId)) {
+          const providerId = connId.slice(PROVIDER_ACCOUNT_PREFIX.length);
+          const sameName = allConnections.filter((c) => c.provider === providerId);
+          accountName =
+            sameName.length === 1
+              ? connectionMap[sameName[0].id] || sameName[0].name || sameName[0].id
+              : providerNodeNameMap[providerId] || providerLabel(providerId);
+        } else {
+          accountName = connectionMap[connId] || `Account ${connId.slice(0, 8)}...`;
+        }
         const accountKey = `${rawModel} (${provider} - ${accountName})`;
         if (!stats.byAccount[accountKey]) {
           stats.byAccount[accountKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cost: 0, rawModel, provider: providerDisplayName, connectionId: connId, accountName, lastUsed: dateKey };
