@@ -137,7 +137,12 @@ export async function GET(request, { params }) {
     const force = new URL(request.url).searchParams.get("force") === "1";
 
 
-    // Get connection from database
+    // noAuth providers that still have a real usage reader upstream. cursor-acp
+// authenticates to Cursor with the account JWT and its quota — plan spend,
+// bonus spend, utilization — comes from api2.cursor.sh like any other.
+const NOAUTH_USAGE_READERS = ["cursor-acp"];
+
+// Get connection from database
     connection = await getProviderConnectionById(connectionId);
     if (!connection) {
       return Response.json({ error: "Connection not found" }, { status: 404 });
@@ -152,19 +157,29 @@ export async function GET(request, { params }) {
     // Only a reason code is returned: the wording belongs to the dashboard, which
     // is localized. An English sentence from here would show up untranslated in
     // every other locale.
-    if (FREE_PROVIDERS[connection.provider]?.noAuth) {
+    // NoAuth providers normally have nothing to ask upstream — but cursor-acp
+    // does: its token is a real Cursor JWT and getCursorUsage already reads
+    // included/bonus/total spend from api2.cursor.sh. Short-circuiting here was
+    // hiding real billing behind local numbers, so the upstream is tried first
+    // and these figures are the fallback, not the answer.
+    const isNoAuth = Boolean(FREE_PROVIDERS[connection.provider]?.noAuth);
+    const localUsageOf = async (conn) => {
       const { getUsageTotalsForConnection } = await import("@/lib/localDb");
+      return {
+        ...(await getUsageTotalsForConnection(conn.id, conn.provider)),
+        grokWeekly: null,
+      };
+    };
+    const withLocalUsage = async (extra) => {
       return Response.json({
-        unsupported: "own-subscription",
-        quotas: [],
-        plan: null,
-        // Prose alone read as "no data". These are the numbers the router
-        // itself recorded — the quota upstream cannot supply, but we can.
-        localUsage: {
-          ...(await getUsageTotalsForConnection(connection.id, connection.provider)),
-          grokWeekly: null,
-        },
+        ...extra,
+        quotas: extra.quotas || [],
+        plan: extra.plan ?? null,
+        localUsage: await localUsageOf(connection),
       });
+    };
+    if (isNoAuth && !NOAUTH_USAGE_READERS.includes(connection.provider)) {
+      return withLocalUsage({ unsupported: "own-subscription" });
     }
 
     // Allow OAuth connections, plus whitelisted apikey providers (glm/minimax/kiro/...)
@@ -175,8 +190,12 @@ export async function GET(request, { params }) {
       connection.authType === "apikey" || connection.authType === "api_key";
     const isApikeyEligible =
       isApikeyAuth && USAGE_APIKEY_PROVIDERS.includes(connection.provider);
+    // Same reasoning as the noAuth block further down: cursor-acp holds a real
+    // Cursor JWT and api2.cursor.sh serves its spend, so refusing it here on the
+    // grounds that it has no api key would hide actual billing.
+    const hasNoAuthReader = NOAUTH_USAGE_READERS.includes(connection.provider);
 
-    if (!isOAuth && !isApikeyEligible) {
+    if (!isOAuth && !isApikeyEligible && !hasNoAuthReader) {
       return Response.json({ message: "Usage not available for this connection" });
     }
 
@@ -218,10 +237,34 @@ export async function GET(request, { params }) {
       }
     }
 
-    return Response.json(usage);
+    // When the upstream answered with nothing but a message, the numbers the
+    // router recorded are still worth showing — that is the whole point of the
+    // card for an agent provider.
+    if (isNoAuth && (!usage?.quotas?.length) && usage?.message) {
+      return withLocalUsage({
+        unsupported: usage.message.includes("not implemented") ? "own-subscription" : "upstream-unavailable",
+        upstreamMessage: usage.message,
+      });
+    }
+
+    return Response.json({ ...usage, localUsage: await localUsageOf(connection) });
   } catch (error) {
     const provider = connection?.provider ?? "unknown";
     console.warn(`[Usage] ${provider}: ${error.message}`);
+
+    // A dead upstream must not empty the card. For an agent provider the
+    // router's own history is still true and still useful — throwing away a
+    // whole billing panel because Cursor's API blinked is the worse failure.
+    if (typeof isNoAuth !== "undefined" && isNoAuth && connection?.id) {
+      return Response.json({
+        unsupported: "upstream-unavailable",
+        upstreamMessage: error.message,
+        quotas: [],
+        plan: null,
+        localUsage: await localUsageOf(connection),
+      });
+    }
+
     return Response.json({ error: error.message }, { status: 500 });
   }
 }

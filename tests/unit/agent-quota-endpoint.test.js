@@ -20,7 +20,9 @@ const { getAdapter } = await import("@/lib/db/driver");
 const { GET } = await import("@/app/api/usage/[connectionId]/route");
 const { USAGE_APIKEY_PROVIDERS } = await import("@/shared/constants/providers");
 
-const AGENTS = ["cursor-acp", "opencode-acp", "omp-acp", "codex-acp", "devin-cli"];
+// cursor-acp is excluded on purpose: it holds a real Cursor JWT and api2
+// answers its spend, so it goes upstream first. It is covered separately below.
+const AGENTS = ["opencode-acp", "omp-acp", "codex-acp", "devin-cli"];
 
 async function seed(provider, extra = {}) {
   const c = await createProviderConnection({ provider, name: `${provider} account`, authType: "apikey", apiKey: "x", ...extra });
@@ -85,7 +87,7 @@ describe("agent card shows the numbers the router already has", () => {
     const { saveRequestUsage } = await import("@/lib/usageDb");
     await saveRequestUsage({
       timestamp: new Date().toISOString(),
-      provider: "cursor-acp",
+      provider: "opencode-acp",
       model: "composer-2.5",
       connectionId: undefined,
       apiKey: "sk-test",
@@ -93,7 +95,7 @@ describe("agent card shows the numbers the router already has", () => {
       tokens: { prompt_tokens: 1000, completion_tokens: 50 },
       status: "ok",
     });
-    const body = await (await call(await seed("cursor-acp"))).json();
+    const body = await (await call(await seed("opencode-acp"))).json();
     expect(body.unsupported).toBe("own-subscription");
     // The quota upstream cannot answer for an agent, but the router's own
     // history can — returning prose alone read as "no data".
@@ -119,6 +121,31 @@ describe("agent widget reports where the money went", () => {
     expect(unpriced.priced).toBe(false);
     expect(unpriced.promptTokens).toBeGreaterThanOrEqual(5000);
     expect(u.fullyPriced).toBe(false);
+  });
+});
+
+describe("cursor-acp asks Cursor before falling back", () => {
+  it("is not short-circuited: it reaches the upstream reader", async () => {
+    // Refusing it because it has no api key would hide real billing — the
+    // connection carries a real Cursor JWT and getCursorUsage already reads
+    // included/bonus/total spend from api2.cursor.sh.
+    const body = await (await call(await seed("cursor-acp"))).json();
+    expect(body.unsupported).not.toBe("own-subscription");
+  });
+
+  it("still shows the router's own numbers when the upstream is unreachable", async () => {
+    const { saveRequestUsage } = await import("@/lib/usageDb");
+    await saveRequestUsage({
+      timestamp: new Date().toISOString(), provider: "cursor-acp", model: "composer-2.5",
+      connectionId: undefined, apiKey: "sk-test", endpoint: "/v1/chat/completions",
+      tokens: { prompt_tokens: 1200, completion_tokens: 30 }, status: "ok",
+    });
+    const body = await (await call(await seed("cursor-acp"))).json();
+    // Losing a whole billing panel because Cursor's API blinked is the worse
+    // failure — the local history is still true.
+    expect(body.localUsage).toBeTruthy();
+    expect(body.localUsage.promptTokens).toBeGreaterThanOrEqual(1200);
+    expect(body.localUsage.tiers).toBeTruthy();
   });
 });
 
