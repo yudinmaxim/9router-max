@@ -198,5 +198,9 @@
   "Requests": "Запросы",
   "Input tokens": "Входные токены",
   "No tariff": "Тарифа нет",
-  "Some models carry no price, so the total understates spend. Set one in Settings → Pricing.": "У части моделей не задан тариф, поэтому итог занижен. Задайте цену в Настройках → Цены."
+  "Some models carry no price, so the total understates spend. Set one in Settings → Pricing.": "У части моделей не задан тариф, поэтому итог занижен. Задайте цену в Настройках → Цены.",
+  "Simple models": "Простые модели",
+  "Complex models": "Сложные модели",
+  "Grok, weekly": "Grok, неделя",
+  "No data": "нет данных"
 }

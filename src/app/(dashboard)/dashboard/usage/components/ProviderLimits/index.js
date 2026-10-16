@@ -98,6 +98,12 @@ function kiroRegion(conn) {
 }
 
 // English is the source string; translate() maps it through the locale file.
+const TIER_LABELS = [
+  ["simple", "Simple models"],
+  ["complex", "Complex models"],
+  ["grok", "Grok, weekly"],
+];
+
 const AGENT_QUOTA_UNSUPPORTED =
   "Runs on your own subscription \u2014 the router has no upstream quota to report.";
 
@@ -1367,6 +1373,35 @@ export default function ProviderLimits() {
                         </p>
                         <p className="text-[10px] text-text-muted">{translate("Cost")}</p>
                       </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2 border-t border-black/5 pt-2 dark:border-white/5">
+                      {TIER_LABELS.map(([key, label]) => {
+                        const t = (quota.localUsage.tiers || {})[key];
+                        const max = Math.max(
+                          1,
+                          ...Object.values(quota.localUsage.tiers || {}).map((x) => x?.promptTokens || 0)
+                        );
+                        const pct = t ? Math.round(((t.promptTokens || 0) / max) * 100) : 0;
+                        return (
+                          <div key={key} className="flex flex-col gap-1">
+                            <div className="flex items-center justify-between gap-2 text-[11px]">
+                              <span className="text-text-muted">{translate(label)}</span>
+                              <span className="text-text-main">
+                                {t && t.requests > 0
+                                  ? `${fmt(t.promptTokens + t.completionTokens)} tok · $${t.cost.toFixed(4)}`
+                                  : translate("No data")}
+                              </span>
+                            </div>
+                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
+                              <div
+                                className="h-full rounded-full bg-primary transition-all"
+                                style={{ width: `${Math.max(pct, t && t.requests > 0 ? 2 : 0)}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
 
                     <div className="flex flex-col gap-1 border-t border-black/5 pt-2 text-[11px] dark:border-white/5">

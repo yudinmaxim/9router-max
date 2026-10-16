@@ -120,3 +120,43 @@ describe("agent widget reports where the money went", () => {
     expect(u.fullyPriced).toBe(false);
   });
 });
+
+describe("tier split behind the three bars", () => {
+  beforeEach(async () => {
+    const db = await getAdapter();
+    db.run("DELETE FROM usageHistory");
+    db.run("DELETE FROM usageDaily");
+  });
+
+  it("separates simple from complex by price, not by model name", async () => {
+    const { saveRequestUsage } = await import("@/lib/usageDb");
+    const ts = new Date().toISOString();
+    // gpt-5.3-codex is $1.75/M input, claude-opus-5-5 is $4.00/M — both above
+    // the $1 threshold, so both are "complex" even though one starts "gpt" and
+    // the other "claude". A name-based rule would split them.
+    await saveRequestUsage({
+      timestamp: ts, provider: "cursor-acp", model: "gpt-5.3-codex",
+      connectionId: undefined, apiKey: "sk-test", endpoint: "/v1/chat/completions",
+      tokens: { prompt_tokens: 2000, completion_tokens: 50 }, status: "ok",
+    });
+    await saveRequestUsage({
+      timestamp: ts, provider: "cursor-acp", model: "claude-opus-5-5",
+      connectionId: undefined, apiKey: "sk-test", endpoint: "/v1/chat/completions",
+      tokens: { prompt_tokens: 800, completion_tokens: 20 }, status: "ok",
+    });
+    const { tiers } = (await (await call(await seed("cursor-acp"))).json()).localUsage;
+    expect(tiers.complex.requests).toBeGreaterThanOrEqual(2);
+    expect(tiers.simple.requests).toBe(0);
+  });
+
+  it("puts grok in its own bar regardless of price", async () => {
+    const { saveRequestUsage } = await import("@/lib/usageDb");
+    await saveRequestUsage({
+      timestamp: new Date().toISOString(), provider: "cursor-acp", model: "grok-4.6",
+      connectionId: undefined, apiKey: "sk-test", endpoint: "/v1/chat/completions",
+      tokens: { prompt_tokens: 300, completion_tokens: 10 }, status: "ok",
+    });
+    const { tiers } = (await (await call(await seed("cursor-acp"))).json()).localUsage;
+    expect(tiers.grok.requests).toBeGreaterThanOrEqual(1);
+  });
+});

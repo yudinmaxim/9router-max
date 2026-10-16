@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
+import { classifyByPrice, rollUpTiers } from "@/lib/quotaTiers";
 import { getMeta, setMeta } from "../helpers/metaStore.js";
 
 function maskApiKey(key) {
@@ -462,7 +463,7 @@ export async function getUsageTotalsForConnection(connectionId, provider) {
   // Per-model split, because a provider total can read as "$0.00" for two very
   // different reasons: nothing was used, or everything was used on models that
   // have no tariff. Only the split tells those apart.
-  const models = db.all(
+  const rawModels = db.all(
     `SELECT model,
             COUNT(*) requests,
             COALESCE(SUM(promptTokens), 0) promptTokens,
@@ -474,15 +475,26 @@ export async function getUsageTotalsForConnection(connectionId, provider) {
      GROUP BY model
      ORDER BY SUM(promptTokens) DESC`,
     [connectionId || "", connectionId || "", provider || "", provider || ""]
-  ).map((m) => ({
-    model: m.model || "unknown",
-    requests: m.requests || 0,
-    promptTokens: m.promptTokens || 0,
-    completionTokens: m.completionTokens || 0,
-    cost: m.cost || 0,
-    // Tokens moved but nothing was charged → the model has no price configured.
-    priced: (m.promptTokens || 0) > 0 && (m.cost || 0) > 0,
-  }));
+  );
+
+  // Tier comes from the price we already hold, never from the model's name.
+  const { getPricingForModel } = await import("./pricingRepo.js");
+  const models = [];
+  for (const m of rawModels) {
+    const model = m.model || "unknown";
+    const pricing = await getPricingForModel(provider || "", model);
+    models.push({
+      model,
+      requests: m.requests || 0,
+      promptTokens: m.promptTokens || 0,
+      completionTokens: m.completionTokens || 0,
+      cost: m.cost || 0,
+      inputPrice: pricing?.input ?? null,
+      tier: classifyByPrice(pricing),
+      // Tokens moved but nothing was charged → the model has no price configured.
+      priced: (m.promptTokens || 0) > 0 && (m.cost || 0) > 0,
+    });
+  }
 
   return {
     requests: row?.requests || 0,
@@ -493,6 +505,7 @@ export async function getUsageTotalsForConnection(connectionId, provider) {
     // True when every model that carried traffic had a price.
     fullyPriced: models.length > 0 && models.every((m) => m.priced),
     models,
+    tiers: rollUpTiers(models),
   };
 }
 
