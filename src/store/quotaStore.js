@@ -21,7 +21,7 @@ let pollTimer = null;
 let inFlight = null;
 
 async function loadChips() {
-  const listRes = await fetch("/api/providers/client?limit=500");
+  const listRes = await fetch("/api/providers/client?pageSize=500");
   if (!listRes.ok) return [];
   const listBody = await listRes.json();
   const connections = Array.isArray(listBody?.connections) ? listBody.connections : [];

@@ -72,8 +72,9 @@ export const CLIENT_STORE_TTL_MS = 60000;
 export const QUOTA_HEADER_CONFIG = {
   pollIntervalMs: 60000,
   serverCacheTtlMs: 60000,
-  // How many accounts to show before collapsing into a single "+N" chip.
-  maxChips: 4,
+  // How many scales to show before collapsing into a single "+N" chip. Bounded
+  // because the chips are not the only thing competing for the header.
+  maxChips: 3,
 };
 
 // Quota auto-ping: keep 5h windows warm by sending a tiny request right after reset.

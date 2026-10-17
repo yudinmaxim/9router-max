@@ -32,7 +32,7 @@ function Chip({ chip }) {
   return (
     <Tooltip text={tooltip}>
       <div
-        className={`hidden lg:flex h-8 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface/70 px-2 text-xs ${colors.text}`}
+        className={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface/70 px-2 text-xs ${colors.text}`}
         aria-label={`${label}, ${quota.label}: ${quota.spent} percent spent, ${quota.remaining} percent left`}
       >
         <ProviderIcon
@@ -43,8 +43,14 @@ function Chip({ chip }) {
           fallbackText={provider?.slice(0, 2).toUpperCase() || "PR"}
         />
         {/* Two Cursor scales render the same numbers, so the scale name has to be
-            on the chip itself — a tooltip alone leaves the strip unreadable. */}
-        <span className="max-w-[92px] truncate text-text-secondary">{quota.label}</span>
+            readable somewhere — but only where there is room for it. Below `lg`
+            the name drops and the numbers stay, because a chip that disappears
+            on a narrow window is worse than a chip without a caption. `.lg\:flex`
+            sits inside `@media (min-width:64rem)`, so gating the whole chip on it
+            hid the feature outright at 1023px. */}
+        <span className="hidden max-w-[92px] truncate text-text-secondary lg:inline">
+          {quota.label}
+        </span>
         <span className="whitespace-nowrap tabular-nums font-medium">
           {quota.spent}% <span className="text-text-muted">→</span> {quota.remaining}%
         </span>
@@ -65,7 +71,7 @@ export default function QuotaChips() {
       ))}
       {overflow > 0 && (
         <Tooltip text={`${overflow} more account(s) — open the Quota page`}>
-          <div className="hidden lg:flex h-8 items-center rounded-lg border border-border-subtle bg-surface/70 px-2 text-xs text-text-muted tabular-nums">
+          <div className="flex h-8 shrink-0 items-center rounded-lg border border-border-subtle bg-surface/70 px-2 text-xs text-text-muted tabular-nums">
             +{overflow}
           </div>
         </Tooltip>
