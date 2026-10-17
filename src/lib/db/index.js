@@ -3,7 +3,7 @@ import { getAdapter } from "./driver.js";
 import { stringifyJson, parseJson } from "./helpers/jsonCol.js";
 import { keyAccessFromColumns, keyAccessToColumns, validateKeyAccessInput } from "@/shared/utils/keyAccess.js";
 import { KEY_ACCESS_UNRESTRICTED } from "@/shared/constants/keyAccess.js";
-import { poolIdentity, scrubTokenFreshness } from "./transfer.js";
+import { poolIdentity, scrubTokenFreshness, SECRET_CONNECTION_FIELDS } from "./transfer.js";
 
 // kv scopes a transfer covers. Anything outside this list stays put on import,
 // which is what keeps usage history and request details out of a restore.
@@ -157,9 +157,32 @@ export async function importDb(payload, options = {}) {
     for (const raw of payload.providerConnections || []) {
       const c = carriesSecrets ? scrubTokenFreshness(raw) : raw;
       const { id, provider, authType, name, email, priority, isActive, createdAt, updatedAt, ...rest } = c;
+      // A config export carries no credentials, so in merge mode it must not take
+      // them away from a connection that has them. Writing the row as it arrived
+      // wiped the tokens off every account on this machine — the card then fell
+      // back to the generic local-usage block and looked like the widget had
+      // regressed, when what had actually happened was that the quota upstream
+      // could no longer be asked at all.
+      //
+      // `replace` still overwrites wholesale: wiping the tables is its contract.
+      let merged = rest;
+      if (strategy === "merge" && !carriesSecrets) {
+        const existingRow = db.get(`SELECT data FROM providerConnections WHERE id = ?`, [id]);
+        if (existingRow) {
+          const existing = parseJson(existingRow.data, {});
+          merged = { ...rest };
+          for (const field of SECRET_CONNECTION_FIELDS) {
+            if (existing[field]) merged[field] = existing[field];
+          }
+          // Freshness belongs to the credential that survived, not to the file.
+          for (const field of ["expiresAt", "tokenExpiresAt", "lastRefreshAt"]) {
+            if (existing[field]) merged[field] = existing[field];
+          }
+        }
+      }
       db.run(
         `INSERT OR REPLACE INTO providerConnections(id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, provider, authType || "oauth", name || null, email || null, priority || null, isActive === false ? 0 : 1, stringifyJson(rest), createdAt || new Date().toISOString(), updatedAt || new Date().toISOString()]
+        [id, provider, authType || "oauth", name || null, email || null, priority || null, isActive === false ? 0 : 1, stringifyJson(merged), createdAt || new Date().toISOString(), updatedAt || new Date().toISOString()]
       );
     }
     for (const n of payload.providerNodes || []) {

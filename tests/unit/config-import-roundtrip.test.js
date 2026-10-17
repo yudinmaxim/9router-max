@@ -137,6 +137,49 @@ describe("merge", () => {
     expect(urls).toEqual(["http://other.example:3128", "http://proxy.example:8080"]);
   });
 
+  it("keeps the credentials it already has when a config export is merged", async () => {
+    // This is not hypothetical. Merging a secret-free export over a live
+    // database wiped every token on the machine, and the symptom was nothing
+    // like the cause: the quota upstream could no longer be asked, so the card
+    // quietly fell back to the generic local-usage block and the Cursor widget
+    // looked like it had regressed.
+    const conn = await createProviderConnection({
+      provider: "claude", name: "Signed in", authType: "oauth", accessToken: "live-token-abc",
+    });
+    await reset();
+    // Re-seed the row as the live one, with a credential.
+    const { getAdapter: ga } = await import("@/lib/db/driver");
+    const db = await ga();
+    db.run(
+      `INSERT INTO providerConnections(id, provider, authType, name, isActive, data, createdAt, updatedAt) VALUES(?, ?, ?, ?, 1, ?, ?, ?)`,
+      [conn.id, "claude", "oauth", "Signed in", JSON.stringify({ accessToken: "live-token-abc", expiresAt: "2026-11-01T00:00:00Z" }), new Date().toISOString(), new Date().toISOString()]
+    );
+
+    const envelope = buildTransfer({
+      ...(await exportDb()),
+      providerConnections: [
+        { id: conn.id, provider: "claude", authType: "oauth", name: "Signed in", isActive: true },
+      ],
+    }, { mode: "config" });
+    expect(envelope.includesSecrets).toBe(false);
+
+    await importDb(envelope.payload, { strategy: "merge", carriesSecrets: false });
+
+    const after = JSON.parse((await ga()).get(`SELECT data FROM providerConnections WHERE id = ?`, [conn.id]).data);
+    expect(after.accessToken, "a secret-free file must not take an authorization away").toBe("live-token-abc");
+    expect(after.expiresAt, "freshness belongs to the credential that survived").toBe("2026-11-01T00:00:00Z");
+  });
+
+  it("still overwrites credentials under replace, because that is the contract", async () => {
+    const conn = await createProviderConnection({ provider: "claude", name: "Signed in", authType: "oauth", accessToken: "live-token-abc" });
+    await importDb({
+      providerConnections: [{ id: conn.id, provider: "claude", authType: "oauth", name: "Signed in", isActive: true }],
+    }, { strategy: "replace" });
+    const db = await getAdapter();
+    const after = JSON.parse(db.get(`SELECT data FROM providerConnections WHERE id = ?`, [conn.id]).data);
+    expect(after.accessToken).toBeUndefined();
+  });
+
   it("replace keeps the old behaviour of wiping first", async () => {
     await createProviderConnection({ provider: "claude", name: "Old", authType: "oauth" });
     await importDb({

@@ -40,7 +40,7 @@ export const IMPORT_STRATEGIES = ["replace", "merge"];
  *  makes the file look restorable when it is not. */
 const ALWAYS_DROPPED_SETTINGS = ["password", "oidcClientSecret", "mitmSudoEncrypted"];
 
-const SECRET_CONNECTION_FIELDS = ["accessToken", "refreshToken", "idToken", "apiKey", "password"];
+export const SECRET_CONNECTION_FIELDS = ["accessToken", "refreshToken", "idToken", "apiKey", "password"];
 
 /** Non-secret provider-specific fields. Anything not listed here is dropped from
  *  a "config" export — see the note above for why. */
