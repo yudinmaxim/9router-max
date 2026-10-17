@@ -277,11 +277,18 @@ export function cursorGrokPool(sandUsage) {
   const pct = num(s.usagePercent, Number.NaN);
   return {
     pct: Number.isFinite(pct) ? Number(pct.toFixed(2)) : null,
-    // Sent as an ISO string here, while the plan endpoints send epoch
-    // millis/seconds — isoDate only reads numbers.
-    periodStart: s.currentPeriodStart || null,
     hasAvailableUsage: s.hasAvailableUsage === true,
     label: s.grokPlanLabel || null,
+    // "Included in Pro" is what the account shows, and cursorPlanName is the
+    // plan it is included in — so the Grok pool is bundled, not billed on top.
+    includedInPlan: s.cursorPlanName || null,
+    // "Resets weekly" is the account's own wording, not a field in the response:
+    // currentPeriodStart there is the billing cycle start and says nothing about
+    // the weekly rollover. The weekly claim is carried; the reset moment is not,
+    // because no endpoint sends it and a guessed date would be worse than none.
+    resetsWeekly: true,
+    onDemandVisible: s.onDemandSettings?.visible === true,
+    onDemandEligible: s.onDemandSettings?.eligible === true,
   };
 }
 

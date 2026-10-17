@@ -106,14 +106,18 @@ export default function CursorQuotaWidget({ spendBars, planLimits, grokPool, tra
           note={translate("Named models, on a separate allowance")}
         />
         <AllowBar
-          label={translate("Grok, weekly")}
+          label={grokPool?.label || translate("Grok Bot")}
           pct={grokPool?.pct}
           muted={translate("Not reported by Cursor")}
-          note={
-            grokPool?.hasAvailableUsage
-              ? translate("Grok pool is available")
-              : translate("Grok pool has no usage left")
-          }
+          note={[
+            grokPool?.includedInPlan
+              ? translate("Included in ") + grokPool.includedInPlan
+              : null,
+            grokPool?.resetsWeekly ? translate("resets weekly") : null,
+            grokPool?.hasAvailableUsage === false ? translate("paused at the limit") : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
         />
       </div>
 

@@ -98,10 +98,17 @@ describe("Cursor Grok pool", () => {
       usagePercent: 0,
       hasAvailableUsage: true,
       grokPlanLabel: "Grok Bot Plan",
+      cursorPlanName: "Pro",
+      onDemandSettings: { visible: true, eligible: true },
     });
     expect(pool.pct).toBe(0);
     expect(pool.hasAvailableUsage).toBe(true);
-    expect(pool.periodStart).toBe("2026-10-15T00:00:00Z");
+    expect(pool.label).toBe("Grok Bot Plan");
+    expect(pool.includedInPlan).toBe("Pro");
+    // The account says "Resets weekly"; the response carries no reset moment,
+    // so the widget states the cadence and invents no date.
+    expect(pool.resetsWeekly).toBe(true);
+    expect(pool).not.toHaveProperty("resetAt");
   });
 });
 
