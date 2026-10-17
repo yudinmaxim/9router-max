@@ -5,8 +5,10 @@
  *
  * One chip per provider showing the number that is closest to running out. The
  * reasoning for picking the tightest row rather than the first one lives in
- * `pickHeaderQuota`; the short version is that a chip whose job is to flag risk
- * and which reports a healthy account is a chip nobody reads.
+ * `pickHeaderQuotas`; the short version is that a chip whose job is to flag risk
+ * and which reports a healthy account is a chip nobody reads, and that one
+ * account can own more than one scale — see that function for why Cursor needs
+ * two chips rather than one averaged one.
  *
  * The Header is remounted on every navigation (`<Header key={pathname} />` in
  * DashboardLayout), so this component holds no state of its own — everything
@@ -22,8 +24,8 @@ function Chip({ chip }) {
   const { provider, label, quota } = chip;
   const colors = getQuotaColors(quota.remaining);
   const tooltip = [
-    `${label}: ${quota.remaining}% left`,
-    quota.label ? `· ${quota.label}` : null,
+    `${label} · ${quota.label}`,
+    `${quota.spent}% spent, ${quota.remaining}% left`,
     quota.resetAt ? `· resets in ${formatResetTime(quota.resetAt)}` : null,
   ].filter(Boolean).join(" ");
 
@@ -31,16 +33,21 @@ function Chip({ chip }) {
     <Tooltip text={tooltip}>
       <div
         className={`hidden lg:flex h-8 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface/70 px-2 text-xs ${colors.text}`}
-        aria-label={`${label} quota ${quota.remaining}% remaining`}
+        aria-label={`${label}, ${quota.label}: ${quota.spent} percent spent, ${quota.remaining} percent left`}
       >
         <ProviderIcon
           src={`/providers/${provider}.png`}
           alt={provider}
           size={16}
-          className="size-4 rounded object-contain"
+          className="size-4 shrink-0 rounded object-contain"
           fallbackText={provider?.slice(0, 2).toUpperCase() || "PR"}
         />
-        <span className="tabular-nums font-medium">{quota.remaining}%</span>
+        {/* Two Cursor scales render the same numbers, so the scale name has to be
+            on the chip itself — a tooltip alone leaves the strip unreadable. */}
+        <span className="max-w-[92px] truncate text-text-secondary">{quota.label}</span>
+        <span className="whitespace-nowrap tabular-nums font-medium">
+          {quota.spent}% <span className="text-text-muted">→</span> {quota.remaining}%
+        </span>
       </div>
     </Tooltip>
   );

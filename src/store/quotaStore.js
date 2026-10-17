@@ -15,7 +15,7 @@
 
 import { create } from "zustand";
 import { QUOTA_HEADER_CONFIG } from "@/shared/constants/config";
-import { pickHeaderQuota } from "@/shared/utils/quota";
+import { pickHeaderQuotas } from "@/shared/utils/quota";
 
 let pollTimer = null;
 let inFlight = null;
@@ -35,27 +35,30 @@ async function loadChips() {
     if (!byProvider.has(c.provider)) byProvider.set(c.provider, c);
   }
 
-  const chips = await Promise.all(
+  // One entry per scale, not per connection. Cursor measures its own models and
+  // everything else against separate allowances, so collapsing them into one chip
+  // would produce a number that belongs to no scale at all.
+  const chips = (await Promise.all(
     [...byProvider.entries()].map(async ([provider, connection]) => {
       try {
         const res = await fetch(`/api/usage/${connection.id}`);
-        if (!res.ok) return null;
+        if (!res.ok) return [];
         const payload = await res.json();
-        const quota = pickHeaderQuota(payload);
-        if (!quota) return null;
-        return {
-          id: connection.id,
+        return pickHeaderQuotas(payload).map((quota) => ({
+          // Scoped by connection and label: two scales of one account must not
+          // collide on the same React key.
+          id: `${connection.id}:${quota.label}`,
           provider,
           label: connection.displayName || connection.name || providerLabel(provider),
           quota,
-        };
+        }));
       } catch {
-        return null;
+        return [];
       }
     })
-  );
+  )).flat();
 
-  return chips.filter(Boolean).sort((a, b) => a.quota.remaining - b.quota.remaining);
+  return chips.sort((a, b) => a.quota.remaining - b.quota.remaining);
 }
 
 function providerLabel(provider) {

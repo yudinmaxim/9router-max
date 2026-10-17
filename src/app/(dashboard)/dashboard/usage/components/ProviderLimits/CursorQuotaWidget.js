@@ -33,19 +33,35 @@ function Row({ label, value, muted, strong }) {
   );
 }
 
+/**
+ * One scale, both directions: `14% → 86%`.
+ *
+ * Cursor reports what was spent, so "14%" on its own is the answer to a question
+ * nobody asked — it reads as "barely used" when it is a fifth of the month gone.
+ * Its complement is on the same allowance, so the pair costs nothing to compute
+ * and leaves no room to misread which way the bar runs. The bar itself still
+ * fills to `spent`, because that is the number being spent.
+ *
+ * A bar with no denominator keeps its own note, and the two are never added:
+ * they are separate allowances, so their sum is a figure Cursor never stated.
+ */
 function AllowBar({ label, pct, note, muted }) {
   const known = typeof pct === "number" && Number.isFinite(pct);
-  const value = known ? Math.max(0, Math.min(100, pct)) : 0;
+  const spent = known ? Math.max(0, Math.min(100, pct)) : null;
+  const left = spent == null ? null : Math.max(0, Math.min(100, 100 - spent));
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-baseline justify-between gap-3 text-[11px]">
         <span className="text-text-muted">{label}</span>
-        <span className="tabular-nums text-text-secondary">
-          {known ? `${value}%` : (muted ?? "—")}
+        <span className="whitespace-nowrap tabular-nums text-text-secondary">
+          {known ? `${spent}% → ${left}%` : (muted ?? "—")}
         </span>
       </div>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
-        <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${value}%` }} />
+        <div
+          className="h-full rounded-full bg-primary transition-all"
+          style={{ width: `${spent ?? 0}%` }}
+        />
       </div>
       {note ? <p className="text-[10px] leading-relaxed text-text-muted">{note}</p> : null}
     </div>

@@ -53,35 +53,53 @@ export function formatResetTime(date) {
   }
 }
 /**
- * The one number a header chip should show for a connection.
+ * What the header chips should show for one connection.
  *
- * Providers disagree about shape, so this is where the disagreement is absorbed:
- * most return a `quotas` array of rows, Cursor's own billing shape has no rows at
- * all and only percent of the cycle spent. Two rules, and they are the only two
- * the payload has ever taken:
+ * Returns a list, because one connection can own more than one scale. Cursor is
+ * the case that forces it: it measures its own models (auto) and everything else
+ * (api) against separate allowances, both read near 14% while the cycle total
+ * reads 14.0. Collapse those two into a single chip and the number becomes
+ * meaningless — the operator cannot tell which scale ran down, and there is no
+ * honest way to average them into one. Two scales, two chips.
  *
- *   - Cursor-style (`spendBars`): the cycle total is spent percent, so what is
- *     left is its complement. The two model bars are deliberately not combined —
- *     they are measured against separate allowances, so adding or averaging them
- *     would report a figure the provider never stated.
+ * Both directions are reported, `spent` and `remaining`. `spent` is what the
+ * provider states and `remaining` is its complement on the *same* scale, so
+ * showing both is arithmetic rather than interpretation. What cannot be done is
+ * combining two different scales, and nothing here does.
+ *
+ *   - Cursor-style (`spendBars`): one chip per bar, plus the cycle total when
+ *     there is one.
  *   - everything else: the row with the least left. A chip exists to flag what is
  *     about to run out; showing the healthiest row would be the one number the
  *     operator does not need. Unlimited rows are skipped — they never run out,
  *     so they can never be the tightest.
  *
- * @returns {{label: string, remaining: number, resetAt: ?string}|null}
+ * @returns {Array<{label: string, spent: number, remaining: number, resetAt: ?string}>}
  */
-export function pickHeaderQuota(payload) {
-  if (!payload || typeof payload !== "object") return null;
+export function pickHeaderQuotas(payload) {
+  if (!payload || typeof payload !== "object") return [];
 
-  const total = payload.spendBars?.total;
-  if (total && Number.isFinite(total.pct)) {
-    return {
-      label: payload.plan || "plan",
-      remaining: clampPercent(100 - total.pct),
-      resetAt: payload.planLimits?.cycleEnd || null,
-    };
+  const bars = payload.spendBars;
+  const cycleEnd = payload.planLimits?.cycleEnd || null;
+  const out = [];
+
+  const asChip = (label, spent) => ({
+    label,
+    spent: clampPercent(spent),
+    remaining: clampPercent(100 - spent),
+    resetAt: cycleEnd,
+  });
+
+  if (bars?.cursorModels && Number.isFinite(bars.cursorModels.pct)) {
+    out.push(asChip("Cursor models", bars.cursorModels.pct));
   }
+  if (bars?.otherModels && Number.isFinite(bars.otherModels.pct)) {
+    out.push(asChip("Other models", bars.otherModels.pct));
+  }
+  if (out.length === 0 && bars?.total && Number.isFinite(bars.total.pct)) {
+    out.push(asChip(payload.plan || "Plan", bars.total.pct));
+  }
+  if (out.length > 0) return out;
 
   const rows = Array.isArray(payload.quotas) ? payload.quotas : [];
   let tightest = null;
@@ -93,7 +111,8 @@ export function pickHeaderQuota(payload) {
       tightest = { label: row.name || "quota", remaining, resetAt: row.resetAt || null };
     }
   }
-  return tightest;
+  if (!tightest) return [];
+  return [{ ...tightest, spent: clampPercent(100 - tightest.remaining) }];
 }
 
 function clampPercent(value) {

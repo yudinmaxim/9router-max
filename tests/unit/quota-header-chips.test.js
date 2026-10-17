@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  pickHeaderQuota,
+  pickHeaderQuotas,
   getQuotaColors,
   getStatusColor,
   getStatusEmoji,
@@ -18,9 +18,9 @@ import {
   formatResetTime,
 } from "@/shared/utils/quota";
 
-describe("picking the number a chip shows", () => {
+describe("picking what a chip shows", () => {
   it("takes the tightest row, not the first", () => {
-    const picked = pickHeaderQuota({
+    const [picked] = pickHeaderQuotas({
       quotas: [
         { name: "Weekly", remainingPercentage: 80 },
         { name: "Session (5h)", remainingPercentage: 12 },
@@ -28,12 +28,14 @@ describe("picking the number a chip shows", () => {
       ],
     });
     expect(picked).toMatchObject({ label: "Session (5h)", remaining: 12 });
+    // The complement is on the same allowance, so it costs nothing to show.
+    expect(picked.spent).toBe(88);
   });
 
   it("ignores unlimited rows even when they sort first", () => {
     // An unlimited row can never be the tightest, and reporting "100% left" as
     // the headline would be the one number nobody needs.
-    const picked = pickHeaderQuota({
+    const [picked] = pickHeaderQuotas({
       quotas: [
         { name: "Everything", remainingPercentage: 100, unlimited: true },
         { name: "Weekly", remainingPercentage: 31 },
@@ -42,12 +44,8 @@ describe("picking the number a chip shows", () => {
     expect(picked.label).toBe("Weekly");
   });
 
-  it("reads Cursor's cycle bar as the complement of what was spent", () => {
-    // spendBars reports spend, not headroom. 14.05% spent is 86% left — and the
-    // two model bars are deliberately not combined, because they are measured
-    // against separate allowances and adding them would report a figure Cursor
-    // never stated.
-    const picked = pickHeaderQuota({
+  it("gives Cursor two chips, because it has two scales", () => {
+    const picked = pickHeaderQuotas({
       plan: "Cursor",
       spendBars: {
         cursorModels: { pct: 14.05 },
@@ -56,47 +54,61 @@ describe("picking the number a chip shows", () => {
       },
       planLimits: { cycleEnd: "2026-11-15T18:17:57.000Z" },
     });
-    expect(picked.remaining).toBe(86);
-    expect(picked.resetAt).toBe("2026-11-15T18:17:57.000Z");
+    // One chip per scale. Collapsing them would produce a number belonging to
+    // neither: 14.05 and 14.22 are near-identical only because they are measured
+    // against separate allowances.
+    expect(picked).toHaveLength(2);
+    expect(picked.map((c) => c.label)).toEqual(["Cursor models", "Other models"]);
+    expect(picked[0]).toMatchObject({ spent: 14, remaining: 86 });
+    expect(picked[1]).toMatchObject({ spent: 14, remaining: 86 });
+    expect(picked[0].resetAt).toBe("2026-11-15T18:17:57.000Z");
+  });
+
+  it("falls back to the cycle total when there are no per-model bars", () => {
+    const picked = pickHeaderQuotas({ plan: "Cursor", spendBars: { total: { pct: 42 } } });
+    expect(picked).toHaveLength(1);
+    expect(picked[0]).toMatchObject({ label: "Cursor", spent: 42, remaining: 58 });
   });
 
   it("clamps an over-spent cycle to zero rather than reporting negative headroom", () => {
-    const picked = pickHeaderQuota({ spendBars: { total: { pct: 140 } } });
+    const [picked] = pickHeaderQuotas({ spendBars: { total: { pct: 140 } } });
     expect(picked.remaining).toBe(0);
+    expect(picked.spent).toBe(100);
   });
 
-  it("returns null when there is nothing worth a chip", () => {
-    expect(pickHeaderQuota(null)).toBeNull();
-    expect(pickHeaderQuota({})).toBeNull();
-    expect(pickHeaderQuota({ quotas: [] })).toBeNull();
-    expect(pickHeaderQuota({ quotas: [{ name: "All", unlimited: true }] })).toBeNull();
+  it("returns an empty list when there is nothing worth a chip", () => {
+    expect(pickHeaderQuotas(null)).toEqual([]);
+    expect(pickHeaderQuotas({})).toEqual([]);
+    expect(pickHeaderQuotas({ quotas: [] })).toEqual([]);
+    expect(pickHeaderQuotas({ quotas: [{ name: "All", unlimited: true }] })).toEqual([]);
     // A provider that answered with a refusal rather than numbers.
-    expect(pickHeaderQuota({ unsupported: "own-subscription" })).toBeNull();
+    expect(pickHeaderQuotas({ unsupported: "own-subscription" })).toEqual([]);
   });
 
-  it("carries three fields out and nothing else", () => {
+  it("carries four fields out and nothing else", () => {
     // This is the whole token-safety argument for the chips. The usage payload is
     // whatever a provider's reader produced, so if this function returned the
     // payload — or spread it — a field called `accessToken` would ride along into
     // a header that renders on every dashboard page. Connections themselves come
     // from /api/providers/client, which has a field whitelist; this is the other
     // half, and it works by omission rather than by filtering.
-    const picked = pickHeaderQuota({
+    const picked = pickHeaderQuotas({
       accessToken: "sk-secret",
       refreshToken: "rt-secret",
       apiKey: "sk-secret",
       connection: { id: "x", apiKey: "sk-secret" },
       quotas: [{ name: "Weekly", remainingPercentage: 12, resetAt: "2026-01-01T00:00:00Z" }],
     });
-    expect(Object.keys(picked).sort()).toEqual(["label", "remaining", "resetAt"]);
+    expect(Object.keys(picked[0]).sort()).toEqual(["label", "remaining", "resetAt", "spent"]);
     expect(JSON.stringify(picked)).not.toContain("sk-secret");
   });
 
   it("keeps a zero-valued row: 0% left is the most urgent thing there is", () => {
-    const picked = pickHeaderQuota({
+    const [picked] = pickHeaderQuotas({
       quotas: [{ name: "Weekly", remainingPercentage: 0 }],
     });
     expect(picked.remaining).toBe(0);
+    expect(picked.spent).toBe(100);
     expect(getStatusColor(0)).toBe("red");
   });
 });

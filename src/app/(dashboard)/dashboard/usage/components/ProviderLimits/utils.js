@@ -6,7 +6,7 @@ import {
   getStatusEmoji,
   calculatePercentage,
   getRemainingPercentage,
-  pickHeaderQuota,
+  pickHeaderQuotas,
 } from "@/shared/utils/quota";
 
 // Re-exported so the imports that already pointed at utils.js keep working.
@@ -17,7 +17,7 @@ export {
   getStatusEmoji,
   calculatePercentage,
   getRemainingPercentage,
-  pickHeaderQuota,
+  pickHeaderQuotas,
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
