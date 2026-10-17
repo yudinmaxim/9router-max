@@ -175,7 +175,7 @@ const NOAUTH_USAGE_READERS = ["cursor-acp"];
         ...extra,
         quotas: extra.quotas || [],
         plan: extra.plan ?? null,
-        localUsage: await localUsageOf(connection),
+        localUsage: await localUsageOf(connection, extra.cursorOwnedModels),
       });
     };
     if (isNoAuth && !NOAUTH_USAGE_READERS.includes(connection.provider)) {
@@ -247,7 +247,10 @@ const NOAUTH_USAGE_READERS = ["cursor-acp"];
       });
     }
 
-    return Response.json({ ...usage, localUsage: await localUsageOf(connection) });
+    return Response.json({
+      ...usage,
+      localUsage: await localUsageOf(connection, usage.cursorOwnedModels),
+    });
   } catch (error) {
     const provider = connection?.provider ?? "unknown";
     console.warn(`[Usage] ${provider}: ${error.message}`);

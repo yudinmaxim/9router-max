@@ -1,30 +1,33 @@
 import React from "react";
 
 /**
- * The Cursor quota widget — numbers first.
+ * The Cursor quota widget — money first, then each model group on its own scale.
  *
- * Every provider gets its own widget here; this one is Cursor's. It answers the
- * only two questions that matter: how much money the cycle has cost, and how
- * each model group is doing against its own allowance.
+ * Every provider gets its own widget here; this one is Cursor's.
  *
- * The three bars deliberately do not share a scale. Cursor measures `auto`
- * (its own models) and `api` (everything else) against separate denominators —
- * both read ~14% while the cycle total reads 14.00%, which is only possible if
- * they are measured separately. Cursor sends no denominator, so the widget shows
- * the percentages as its own bar and never adds them up, renormalises them, or
- * presents them as slices of one whole.
+ * The plan limits come as one sentence worth telling: $20 of included credit
+ * spent against $20 included, $44.72 paid from bonus, `remainingBonus: false`
+ * meaning there is no bonus left. Read as three unrelated numbers this looks
+ * like a contradiction, so the widget groups them the way the account does.
+ *
+ * The two model bars deliberately do not share a scale. Cursor measures auto
+ * (its own models) and api (everything else) against separate allowances — both
+ * read near 14% while the cycle total reads 14.00, and together they reach 28.2,
+ * which only works if they are measured separately. The denominators are not
+ * sent, so the bars are never added up or renormalised.
  *
  * Money comes from Cursor and is authoritative. The router's own history is not
  * used for it: locally the same period prices out at a few thousandths of a
- * dollar, because most routed models carry no tariff, so a locally-derived
- * split would contradict the number Cursor actually charges.
+ * dollar, because most routed models carry no tariff.
  */
-function Money({ label, value, muted, strong }) {
+const money = (v) => (typeof v === "number" && Number.isFinite(v) ? `$${v.toFixed(2)}` : null);
+
+function Row({ label, value, muted, strong }) {
   return (
     <div className="flex items-baseline justify-between gap-3 text-[11px]">
       <span className={strong ? "text-text-secondary" : "text-text-muted"}>{label}</span>
       <span className={strong ? "font-medium tabular-nums text-text" : "tabular-nums text-text-secondary"}>
-        {value == null ? (muted ?? "—") : `$${value.toFixed(2)}`}
+        {value == null ? (muted ?? "—") : value}
       </span>
     </div>
   );
@@ -49,45 +52,76 @@ function AllowBar({ label, pct, note, muted }) {
   );
 }
 
-export default function CursorQuotaWidget({ spendBars, translate }) {
-  const totals = spendBars?.total || null;
+export default function CursorQuotaWidget({ spendBars, planLimits, grokPool, translate }) {
   if (!spendBars) return null;
+  const limits = planLimits || null;
+  const cycleEnd = limits?.cycleEnd
+    ? new Date(limits.cycleEnd).toLocaleDateString(translate("ru-RU"))
+    : null;
 
   return (
     <div className="flex flex-col gap-4 py-1">
+      {limits?.membership && (
+        <p className="text-[11px] text-text-secondary">
+          {limits.membership}
+          {limits.price ? ` · ${limits.price}` : ""}
+          {cycleEnd ? ` · ${translate("until")} ${cycleEnd}` : ""}
+        </p>
+      )}
+
       <div className="flex flex-col gap-1">
-        <Money label={translate("Spent this cycle")} value={totals?.amount} strong />
-        <Money label={translate("Included in plan")} value={totals?.includedAmount} />
-        <Money label={translate("Bonus credit")} value={totals?.bonusAmount} />
-        <Money label={translate("Plan limit")} value={totals?.limitAmount} />
+        <Row label={translate("Spent this cycle")} value={money(limits?.totalSpend ?? spendBars?.total?.amount)} strong />
+        <Row
+          label={translate("Included credit")}
+          value={
+            limits?.includedUsed != null
+              ? `${money(limits.includedUsed)}${limits.includedLimit != null ? ` / ${money(limits.includedLimit)}` : ""}`
+              : money(spendBars?.total?.includedAmount)
+          }
+        />
+        <Row
+          label={translate("Included credit left")}
+          value={money(limits?.includedRemaining)}
+          muted={translate("unknown")}
+        />
+        <Row
+          label={translate("Bonus credit")}
+          value={
+            limits?.bonusUsed != null
+              ? `${money(limits.bonusUsed)}${limits.bonusRemaining === false ? ` · ${translate("exhausted")}` : ""}`
+              : money(spendBars?.total?.bonusAmount)
+          }
+        />
       </div>
 
       <div className="flex flex-col gap-3 border-t border-black/5 pt-3 dark:border-white/5">
         <AllowBar
           label={translate("Cursor models")}
           pct={spendBars?.cursorModels?.pct}
-          note={translate("Measured against Cursor's own allowance")}
+          note={translate("Composer and Grok, on Cursor's own allowance")}
         />
         <AllowBar
           label={translate("Other models")}
           pct={spendBars?.otherModels?.pct}
-          note={translate("Measured against a separate allowance")}
+          note={translate("Named models, on a separate allowance")}
         />
         <AllowBar
           label={translate("Grok, weekly")}
-          pct={spendBars?.grokWeekly?.pct}
+          pct={grokPool?.pct}
           muted={translate("Not reported by Cursor")}
-          note={translate("Cursor's billing API does not send this allowance yet")}
+          note={
+            grokPool?.hasAvailableUsage
+              ? translate("Grok pool is available")
+              : translate("Grok pool has no usage left")
+          }
         />
       </div>
 
-      {totals?.denominatorsKnown === false && (
-        <p className="text-[10px] leading-relaxed text-text-muted">
-          {translate(
-            "Each bar is measured against its own allowance, so the percentages do not add up to the cycle total."
-          )}
-        </p>
-      )}
+      <p className="text-[10px] leading-relaxed text-text-muted">
+        {translate(
+          "Each bar is measured against its own allowance, so the percentages do not add up to the cycle total."
+        )}
+      </p>
     </div>
   );
 }

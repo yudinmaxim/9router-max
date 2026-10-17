@@ -2,7 +2,7 @@ import { EventEmitter } from "events";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
-import { classifyModelTier, rollUpTiers } from "@/lib/quotaTiers";
+import { classifyByProviderList, classifyModelTier, rollUpTiers } from "@/lib/quotaTiers";
 import { getMeta, setMeta } from "../helpers/metaStore.js";
 
 function maskApiKey(key) {
@@ -447,7 +447,7 @@ export async function backfillDailyAccounts(dateKeys) {
  * for noAuth requests, which are stored with a synthetic id (see
  * aggregateEntryToDay).
  */
-export async function getUsageTotalsForConnection(connectionId, provider) {
+export async function getUsageTotalsForConnection(connectionId, provider, ownedModels) {
   const db = await getAdapter();
   const row = db.get(
     `SELECT COUNT(*) requests,
@@ -505,7 +505,7 @@ export async function getUsageTotalsForConnection(connectionId, provider) {
     // True when every model that carried traffic had a price.
     fullyPriced: models.length > 0 && models.every((m) => m.priced),
     models,
-    tiers: rollUpTiers(models),
+    tiers: rollUpTiers(models, classifyByProviderList(ownedModels)),
     // The weekly Grok allowance is a provider quota, not spend: it arrives with
     // the quota payload, so it is absent whenever no grok-cli connection exists.
     grokWeekly: null,

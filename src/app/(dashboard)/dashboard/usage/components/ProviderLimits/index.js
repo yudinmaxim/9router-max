@@ -1357,7 +1357,12 @@ export default function ProviderLimits() {
                     <p className="mt-1.5 text-xs text-text-muted">{error}</p>
                   </div>
                 ) : quota?.spendBars ? (
-                  <CursorQuotaWidget spendBars={quota.spendBars} translate={translate} />
+                  <CursorQuotaWidget
+                    spendBars={quota.spendBars}
+                    planLimits={quota.planLimits}
+                    grokPool={quota.grokPool}
+                    translate={translate}
+                  />
                 ) : quota?.localUsage ? (
                   <div className="flex flex-col gap-3 py-3">
                     <div className="grid grid-cols-3 gap-2 text-center">

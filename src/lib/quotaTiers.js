@@ -28,11 +28,11 @@ export function emptyTier() {
  * Cursor Models by definition — it is listed there explicitly upstream — and the
  * weekly allowance is reported separately by the provider.
  */
-export function rollUpTiers(models) {
+export function rollUpTiers(models, classify = classifyModelTier) {
   const tiers = { cursorModels: emptyTier(), otherModels: emptyTier() };
   for (const m of models || []) {
     const name = String(m.model || "");
-    const bucket = tiers[classifyModelTier(name)];
+    const bucket = tiers[classify(name)];
     bucket.requests += m.requests || 0;
     bucket.promptTokens += m.promptTokens || 0;
     bucket.completionTokens += m.completionTokens || 0;
@@ -66,4 +66,20 @@ export function computeTierShares(tiers) {
     };
   }
   return { shares, useCost };
+}
+
+/**
+ * Classify against a model list the provider publishes itself.
+ *
+ * Cursor sends autoBucketModels — the exact set it bills as its own, composer-*
+ * and vega-* and the whole grok-* family. A name pattern guesses at that and gets
+ * it wrong in both directions: an unknown composer build lands under "other", and
+ * a third-party model that merely contains "grok" lands under Cursor's. When the
+ * list is present it decides; when it is missing the pattern is the fallback, so
+ * a caller without the list still gets an answer rather than nothing.
+ */
+export function classifyByProviderList(ownedModels) {
+  const owned = new Set((ownedModels || []).map((m) => String(m)));
+  if (owned.size === 0) return classifyModelTier;
+  return (model) => (owned.has(String(model)) ? "cursorModels" : "otherModels");
 }

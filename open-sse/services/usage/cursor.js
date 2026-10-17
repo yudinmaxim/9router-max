@@ -123,6 +123,10 @@ function parseUsage(data) {
     plan: plan_name || "Cursor",
     quotas,
     spendBars: cursorSpendBars(plan),
+    // Cursor publishes the exact model list it bills as its own: composer-*, 
+    // vega-* and the grok-* family. Guessing at that from the model name is how
+    // a router ends up putting a Cursor model under "other" or the reverse.
+    cursorOwnedModels: Array.isArray(data.autoBucketModels) ? data.autoBucketModels : [],
   };
 
   // Surface upstream's own state so the dashboard can warn before a request
@@ -189,6 +193,98 @@ export function cursorSpendBars(plan) {
   };
 }
 
+const DASHBOARD_SERVICE = "https://api2.cursor.sh/aiserver.v1.DashboardService/";
+
+/**
+ * One Connect-RPC GET against the dashboard service, or null.
+ *
+ * Every dashboard number comes from this service; only some of it is needed at
+ * once, and a missing answer must never take the whole widget down with it.
+ */
+async function dashboardRpc(token, machineId, method, timeoutMs = 12000) {
+  try {
+    const response = await makeCursorHttp2Request(
+      DASHBOARD_SERVICE + method,
+      {
+        ...buildCursorHeaders(token, machineId),
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      "{}",
+      null,
+      { timeoutMs }
+    );
+    if (response.status !== 200) return null;
+    return JSON.parse(response.body.toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What the plan actually allows, and how much of it is gone.
+ *
+ * The usage endpoint alone reads as three unrelated numbers: $20 spent against
+ * a $20 limit, $44.72 of bonus and $64.72 in total. Together they say one
+ * thing — the included $20 is used up, the rest was paid for out of bonus, and
+ * `remainingBonus: false` means there is no bonus left either. Split out, the
+ * widget can say that instead of showing a zero remainder and a number nobody
+ * can place.
+ */
+export function cursorPlanLimits(planUsage, planInfo) {
+  const info = planInfo?.planInfo || null;
+  const up = planUsage || {};
+  const cents = (v) => {
+    const n = num(v, Number.NaN);
+    return Number.isFinite(n) ? Number((n / CENTS).toFixed(2)) : null;
+  };
+  const limit = cents(up.limit);
+  const includedUsed = cents(up.includedSpend);
+  return {
+    membership: info?.planName || null,
+    price: info?.price || null,
+    cycleEnd: isoDate(info?.billingCycleEnd ?? up.billingCycleEnd),
+    includedUsagePeriod: info?.includedUsagePeriod || null,
+    includedLimit: limit,
+    includedUsed,
+    includedRemaining:
+      limit != null && includedUsed != null ? Number((limit - includedUsed).toFixed(2)) : null,
+    bonusUsed: cents(up.bonusSpend),
+    bonusRemaining: up.remainingBonus === true,
+    totalSpend: cents(up.totalSpend),
+    nextTier: planInfo?.nextUpgrade
+      ? {
+          name: planInfo.nextUpgrade.name,
+          price: planInfo.nextUpgrade.price,
+          includedAmountCents: planInfo.nextUpgrade.includedAmountCents ?? null,
+          description: planInfo.nextUpgrade.description || null,
+        }
+      : null,
+  };
+}
+
+/**
+ * Grok's own allowance, as far as Cursor reports it.
+ *
+ * GetSandUsageStatus is the only endpoint that answers this, and it is a
+ * separate pool from the plan usage above: its period starts with the billing
+ * cycle, not the week. Whether it is the same weekly allowance the account sees
+ * in the UI is not something the response states, so the widget labels it as
+ * Cursor's figure rather than claiming it is the account's.
+ */
+export function cursorGrokPool(sandUsage) {
+  const s = sandUsage || {};
+  const pct = num(s.usagePercent, Number.NaN);
+  return {
+    pct: Number.isFinite(pct) ? Number(pct.toFixed(2)) : null,
+    // Sent as an ISO string here, while the plan endpoints send epoch
+    // millis/seconds — isoDate only reads numbers.
+    periodStart: s.currentPeriodStart || null,
+    hasAvailableUsage: s.hasAvailableUsage === true,
+    label: s.grokPlanLabel || null,
+  };
+}
+
 export async function getCursorUsage(accessToken = null, providerSpecificData = null) {
   const token = typeof accessToken === "string" ? accessToken.trim() : "";
   if (!token) {
@@ -242,6 +338,17 @@ export async function getCursorUsage(accessToken = null, providerSpecificData = 
 
     const parsed = parseUsage(data);
     if (!parsed) return { plan: "Cursor", message: "Cursor usage response was empty." };
+
+    // Plan name, cycle end and the Grok pool live on their own endpoints. They
+    // are fetched after the main call has already succeeded, and each answer is
+    // allowed to be missing — a widget that knows its spend but not its plan
+    // name is still worth showing.
+    const [planInfo, sandUsage] = await Promise.all([
+      dashboardRpc(token, machineId, "GetPlanInfo"),
+      dashboardRpc(token, machineId, "GetSandUsageStatus"),
+    ]);
+    parsed.planLimits = cursorPlanLimits(data.planUsage || data.plan_usage, planInfo);
+    parsed.grokPool = cursorGrokPool(sandUsage);
     return parsed;
   } catch (error) {
     return { message: `Cursor usage error: ${error.message}` };
