@@ -335,6 +335,9 @@ export default function ProviderLimits() {
         message: data.message || null,
         unsupported: data.unsupported || null,
         localUsage: data.localUsage || null,
+        // Provider-specific widgets read these off the entry, not off `raw`.
+        spendBars: data.spendBars || null,
+        planLimits: data.planLimits || null,
         raw: data,
       };
 

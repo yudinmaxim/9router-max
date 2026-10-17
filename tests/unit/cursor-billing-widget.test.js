@@ -108,3 +108,39 @@ describe("Cursor model classification", () => {
     expect(classify("composer-2.5")).toBe("cursorModels");
   });
 });
+
+describe("Cursor widget wiring", () => {
+  // The endpoint returned spendBars and planLimits all along, but the card reads
+  // them off the quota entry rather than off `raw`, and the entry was built from
+  // a hand-written field list that omitted both. The widget therefore never
+  // rendered and the page silently fell back to the generic local-usage block.
+  // The component itself cannot be imported here (its JSX lives in a .js file),
+  // so pin the wiring at its source.
+  it("forwards the bars and the plan limits onto the quota entry", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile(
+      new URL(
+        "../../src/app/(dashboard)/dashboard/usage/components/ProviderLimits/index.js",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const entry = src.match(/const quotaEntry = \{[\s\S]*?\n {6}\};/);
+    expect(entry).not.toBeNull();
+    expect(entry[0]).toMatch(/spendBars:\s*data\.spendBars/);
+    expect(entry[0]).toMatch(/planLimits:\s*data\.planLimits/);
+  });
+
+  it("renders the widget off those fields", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile(
+      new URL(
+        "../../src/app/(dashboard)/dashboard/usage/components/ProviderLimits/index.js",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    expect(src).toMatch(/quota\?\.spendBars\s*\?\s*\(\s*<CursorQuotaWidget/);
+    expect(src).toMatch(/planLimits=\{quota\.planLimits\}/);
+  });
+});
