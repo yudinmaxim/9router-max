@@ -61,6 +61,16 @@ export const FETCH_CONNECT_TIMEOUT_MS = envMs("FETCH_CONNECT_TIMEOUT_MS", 60 * 1
 // Gemini native TTS fetch timeout: abort if Google does not return response headers in time.
 export const GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS = envMs("GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS", 45 * 1000);
 
+// Server-side MCP tool loop: how many times one client request may re-dispatch
+// to run the MCP tools the model asked for. Each round is a full upstream call,
+// so this is a cost ceiling as much as a correctness one — a model looping on a
+// failing tool must not be able to spend the caller's quota indefinitely.
+// Env: MCP_TOOL_LOOP_MAX.
+const MCP_TOOL_LOOP_MAX_RAW = Number.parseInt(process.env.MCP_TOOL_LOOP_MAX ?? "", 10);
+export const MCP_TOOL_LOOP_MAX = Number.isFinite(MCP_TOOL_LOOP_MAX_RAW) && MCP_TOOL_LOOP_MAX_RAW > 0
+  ? MCP_TOOL_LOOP_MAX_RAW
+  : 4;
+
 // Default token limits
 export const DEFAULT_MAX_TOKENS = 64000;
 export const DEFAULT_MIN_TOKENS = 32000;

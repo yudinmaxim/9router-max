@@ -28,6 +28,7 @@ import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
 import { buildMcpProxyTargets } from "@/lib/mcp/proxyTargets.js";
+import { buildMcpToolBridge } from "@/lib/mcp/toolBridge.js";
 
 /**
  * Handle chat completion request
@@ -331,6 +332,12 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       // some, and ignored by non-ACP executors. The engine never reads the
       // database itself, which is why this arrives as an argument.
       mcpProxyTargets: await buildMcpProxyTargets(),
+      // The other half of the registry: for an OpenAI-compatible provider the
+      // router itself speaks MCP on the model's behalf, because the
+      // credentials are ours and the client has no way to reach the server.
+      // Null when nothing is registered, which is every operator who never
+      // opened the MCP page.
+      mcpToolBridge: await buildMcpToolBridge(),
       // Detect source format by endpoint + body
       sourceFormatOverride: request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null,
       onCredentialsRefreshed: async (newCreds) => {

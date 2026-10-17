@@ -10,7 +10,7 @@ import { getModelTargetFormat, getModelSupportedFormats, getModelStrip, getModel
 import { PROVIDERS } from "../config/providers.js";
 import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
 import { upstreamResponseHeaders } from "../utils/upstreamHeaders.js";
-import { HTTP_STATUS, TOKEN_SAVER_HEADER } from "../config/runtimeConfig.js";
+import { HTTP_STATUS, TOKEN_SAVER_HEADER, MCP_TOOL_LOOP_MAX } from "../config/runtimeConfig.js";
 import { handleBypassRequest } from "../utils/bypassHandler.js";
 import { trackPendingRequest, appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { getExecutor } from "../executors/index.js";
@@ -21,6 +21,7 @@ import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/streamingHandler.js";
 import { detectClientTool, isNativePassthrough } from "../utils/clientDetector.js";
 import { dedupeTools } from "../utils/toolDeduper.js";
+import { readResponseMessage, rebuildResponse, pickOwnedToolCalls, parseToolArguments, appendToolResults } from "../utils/mcpToolLoop.js";
 import { injectCaveman } from "../rtk/caveman.js";
 import { injectPonytail } from "../rtk/ponytail.js";
 import { compressMessages } from "../rtk/index.js";
@@ -59,7 +60,7 @@ export function stripContinuityFields(body) {
   return body;
 }
 
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, providerOverrides, acpPermissions, mcpProxyTargets }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, providerOverrides, acpPermissions, mcpProxyTargets, mcpToolBridge }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
   // Stable per-session color so all lines of one CLI conversation share a tag
@@ -214,6 +215,45 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     stripContinuityFields(translatedBody);
   }
 
+  // MCP tools from the router-side registry (spec 4.5). Declared before
+  // dedupeTools so they go through the same normalization as everything else —
+  // a provider that rejects duplicate names must not see ours twice.
+  //
+  // Only when the client is not streaming: we could declare tools to a streaming
+  // client but not answer the call afterwards, and a call the client cannot run
+  // (it has no credentials for our servers) is a dead end rather than a feature.
+  //
+  // ACP providers are excluded — they already receive these same servers through
+  // mcpProxyTargets and speak MCP themselves, so declaring them here too would
+  // hand the agent the same capability twice. getExecutor is a cached factory
+  // with no side effects, so asking it here costs nothing.
+  const executor = getExecutor(provider);
+  const mcpLoopEligible = Boolean(mcpToolBridge)
+    && !clientRequestedStreaming
+    && !passthrough
+    && !executor.acp
+    && Array.isArray(translatedBody.messages);
+  let ownedMcpTools = [];
+  if (mcpLoopEligible) {
+    try {
+      ownedMcpTools = await mcpToolBridge.list();
+    } catch (e) {
+      log?.warn?.("MCP", `tool discovery failed, continuing without it: ${e.message}`);
+      ownedMcpTools = [];
+    }
+    if (ownedMcpTools.length > 0) {
+      const existing = new Set(
+        (Array.isArray(translatedBody.tools) ? translatedBody.tools : []).map((t) => t?.function?.name || t?.name || "")
+      );
+      const fresh = ownedMcpTools.filter((t) => !existing.has(t.function.name));
+      if (fresh.length > 0) {
+        translatedBody.tools = [...(translatedBody.tools || []), ...fresh];
+        if (log?.debug) log.debug("MCP", `declared ${fresh.length} registry tool(s)`);
+      }
+      ownedMcpTools = fresh;
+    }
+  }
+
   // Tool normalization: MCP-equivalent built-in dedup (Claude clients) + same-name
   // dedup for DeepSeek models (upstream rejects duplicate tool names on all endpoints).
   if (Array.isArray(translatedBody.tools)) {
@@ -223,6 +263,15 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       log?.debug?.("TOOLDEDUP", `stripped ${stripped.length}: ${stripped.slice(0, 3).join(", ")}${stripped.length > 3 ? "..." : ""}`);
     }
   }
+
+  // Only tools that actually reached the model can be answered by us. The
+  // dedup rules above can drop a declared name, and answering a call the model
+  // was never offered would leave an orphaned tool result in the history.
+  const ownedMcpNames = new Set(
+    ownedMcpTools
+      .map((t) => t?.function?.name)
+      .filter((n) => typeof n === "string" && (translatedBody.tools || []).some((t) => (t?.function?.name || t?.name) === n))
+  );
 
   // Token savers: applied at the final body just before dispatch
   // Covers both passthrough (source shape) and translated (target shape) flows
@@ -316,7 +365,6 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // system/tools/messages, and a stale anchor costs a full prefix rewrite.
   if (passthrough && clientTool === "claude") anchorClaudeCache(translatedBody);
 
-  const executor = getExecutor(provider);
   trackPendingRequest(model, provider, connectionId, true);
   appendRequestLog({ model, provider, connectionId, status: "PENDING" }).catch(() => { });
 
@@ -489,6 +537,64 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     }
     reqLogger.logError(new Error(message), finalBody || translatedBody);
     return createErrorResult(statusCode, errMsg, resetsAtMs, upstreamResponseHeaders(providerResponse.headers));
+  }
+
+  // Server-side MCP tool loop (spec 4.6). Runs only when the model actually
+  // called one of the registry tools declared above; every other outcome leaves
+  // the response exactly as the provider sent it.
+  if (ownedMcpNames.size > 0) {
+    const cap = MCP_TOOL_LOOP_MAX;
+    for (let round = 0; round < cap; round += 1) {
+      const read = await readResponseMessage(providerResponse);
+      // The body has been consumed either way, so the response handed on has to
+      // be rebuilt — including when there is nothing to do.
+      providerResponse = rebuildResponse(providerResponse, read.text, read.wasSse);
+      const calls = pickOwnedToolCalls(read.message, (name) => ownedMcpNames.has(name));
+      if (calls.length === 0) break;
+
+      const results = [];
+      for (const call of calls) {
+        let outcome;
+        try {
+          outcome = await mcpToolBridge.call(call.function.name, parseToolArguments(call.function.arguments));
+        } catch (e) {
+          outcome = { ok: false, text: `MCP tool failed: ${e.message}`, isError: true };
+        }
+        results.push({ text: outcome.text || (outcome.ok ? "(empty result)" : "MCP tool failed") });
+      }
+      if (log?.debug) log.debug("MCP", `round ${round + 1}: ran ${calls.length} tool call(s)`);
+
+      translatedBody.messages = appendToolResults(
+        translatedBody.messages,
+        read.message,
+        calls,
+        results
+      );
+
+      try {
+        const next = await executor.execute({
+          model,
+          body: translatedBody,
+          stream,
+          credentials,
+          providerSessionId: sessionSeed,
+          clientTool,
+          signal: streamController.signal,
+          log,
+          proxyOptions,
+          providerOverrides,
+          acpPermissions,
+          mcpProxyTargets,
+        });
+        providerResponse = next.response;
+        providerUrl = next.url;
+        finalBody = next.transformedBody;
+        providerResponseFormat = next.responseFormat || targetFormat;
+      } catch (e) {
+        log?.warn?.("MCP", `continuation failed: ${e.message}`);
+        break;
+      }
+    }
   }
 
   const sharedCtx = { provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log };
