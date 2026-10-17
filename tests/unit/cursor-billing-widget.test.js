@@ -20,6 +20,10 @@ describe("Cursor billing numbers", () => {
     expect(bars.total.pct).toBe(14);
     expect(bars.cursorModels.pct).toBe(13.99);
     expect(bars.otherModels.pct).toBe(14.22);
+    // Cursor sends no per-category money, and bonusSpend is not one: it is the
+    // cycle's extra credit, not what Cursor's own models cost.
+    expect(bars.cursorModels.amount).toBeNull();
+    expect(bars.otherModels.amount).toBeNull();
   });
 
   it("does not pretend the two model percentages share a scale", () => {

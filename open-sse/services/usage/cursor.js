@@ -167,7 +167,11 @@ export function cursorSpendBars(plan) {
     return Number.isFinite(n) ? Number((n / CENTS).toFixed(2)) : null;
   };
   return {
-    cursorModels: { pct: pct(plan?.autoPercentUsed ?? plan?.auto_percent_used), amount: dollars(plan?.bonusSpend ?? plan?.bonus_spend) },
+    // Money per category is null on purpose. Cursor sends totalSpend,
+    // includedSpend and bonusSpend for the cycle as a whole and nothing per
+    // category — reporting bonusSpend as "Cursor models' spend" would be a
+    // number that reads true and means nothing.
+    cursorModels: { pct: pct(plan?.autoPercentUsed ?? plan?.auto_percent_used), amount: null },
     otherModels: { pct: pct(plan?.apiPercentUsed ?? plan?.api_percent_used), amount: null },
     total: {
       pct: pct(plan?.totalPercentUsed ?? plan?.total_percent_used),
