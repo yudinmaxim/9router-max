@@ -122,6 +122,7 @@ function parseUsage(data) {
   const result = {
     plan: plan_name || "Cursor",
     quotas,
+    spendBars: cursorSpendBars(plan),
   };
 
   // Surface upstream's own state so the dashboard can warn before a request
@@ -144,6 +145,46 @@ function parseUsage(data) {
  *   `cursor-agent --api-key` value on the cursor-acp connection)
  * @param {object|null} providerSpecificData
  */
+/**
+ * The three spend bars the Cursor quota widget draws.
+ *
+ * Cursor's plan usage carries exactly two model-side percentages — auto (its
+ * own models, i.e. Auto/Composer) and api (everything else) — plus the cycle
+ * total. It reports nothing about a weekly Grok allowance, so that bar is not
+ * part of this: it is a separate provider's quota (grok-cli) and is filled in
+ * by the caller, which knows whether such a connection exists.
+ *
+ * Percentages are of Cursor's own cycle allowance, so they are not shares of
+ * each other: auto 13.99 and api 14.22 sum to more than total 14.00.
+ */
+export function cursorSpendBars(plan) {
+  const pct = (v) => {
+    const n = num(v, Number.NaN);
+    return Number.isFinite(n) ? Number(n.toFixed(2)) : null;
+  };
+  const dollars = (v) => {
+    const n = num(v, Number.NaN);
+    return Number.isFinite(n) ? Number((n / CENTS).toFixed(2)) : null;
+  };
+  return {
+    cursorModels: { pct: pct(plan?.autoPercentUsed ?? plan?.auto_percent_used), amount: dollars(plan?.bonusSpend ?? plan?.bonus_spend) },
+    otherModels: { pct: pct(plan?.apiPercentUsed ?? plan?.api_percent_used), amount: null },
+    total: {
+      pct: pct(plan?.totalPercentUsed ?? plan?.total_percent_used),
+      amount: dollars(plan?.totalSpend ?? plan?.total_spend),
+      includedAmount: dollars(plan?.includedSpend ?? plan?.included_spend),
+      bonusAmount: dollars(plan?.bonusSpend ?? plan?.bonus_spend),
+      limitAmount: dollars(plan?.limit ?? plan?.limit_amount),
+      // The percentages are not shares of one allowance: auto 13.99 and api
+      // 14.22 both read near 14% and together come to 28.21, well past the
+      // 14.00 cycle total, so each is measured against its own denominator —
+      // which Cursor does not send. Without this flag the widget cannot tell
+      // "13.99%" apart from "13.99% of the cycle".
+      denominatorsKnown: false,
+    },
+  };
+}
+
 export async function getCursorUsage(accessToken = null, providerSpecificData = null) {
   const token = typeof accessToken === "string" ? accessToken.trim() : "";
   if (!token) {

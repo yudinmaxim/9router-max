@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import QuotaTable from "./QuotaTable";
+import CursorQuotaWidget from "./CursorQuotaWidget";
 import { fmt } from "../UsageTable";
 import Toggle from "@/shared/components/Toggle";
 import Tooltip from "@/shared/components/Tooltip";
@@ -1355,6 +1356,8 @@ export default function ProviderLimits() {
                     </span>
                     <p className="mt-1.5 text-xs text-text-muted">{error}</p>
                   </div>
+                ) : quota?.spendBars ? (
+                  <CursorQuotaWidget spendBars={quota.spendBars} translate={translate} />
                 ) : quota?.localUsage ? (
                   <div className="flex flex-col gap-3 py-3">
                     <div className="grid grid-cols-3 gap-2 text-center">
