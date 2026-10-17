@@ -27,7 +27,6 @@ import codebuddyIntl from "./codebuddy-intl.js";
 import kimchi from "./kimchi.js";
 import trae from "./trae.js";
 import windsurf from "./windsurf.js";
-import zed from "./zed.js";
 import glm from "./glm.js";
 import minimaxCode from "./minimax-code.js";
 import minimaxCodeGlobal from "./minimax-code-global.js";
@@ -57,7 +56,6 @@ const PROVIDERS = {
   kimchi,
   trae,
   windsurf,
-  zed,
   glm,
   "minimax-code": minimaxCode,
   "minimax-code-global": minimaxCodeGlobal,

@@ -44,6 +44,20 @@ import {
 import { detectIdeInstalled } from "@/lib/oauth/utils/ideDetect";
 import { ZED_HOSTED_CONFIG } from "@/lib/oauth/constants/oauth";
 
+// Zed is deliberately not supported. Every sign-in minted a fresh connection for
+// the same account — the proxy callback created one without ever looking for an
+// existing one — so a single Zed login repeated into a dozen duplicates. Reject
+// every entry point here so neither a stale UI nor a direct call can add more.
+const DISABLED_OAUTH_PROVIDERS = new Set(["zed"]);
+
+function rejectDisabledProvider(provider) {
+  if (!DISABLED_OAUTH_PROVIDERS.has(provider)) return null;
+  return NextResponse.json(
+    { error: "Zed connections are no longer supported." },
+    { status: 410 }
+  );
+}
+
 async function completeXaiManualCode(code, state) {
   const session = state ? getXaiSessionStatus(state) : null;
   if (!session) {
@@ -93,6 +107,8 @@ async function completeXaiManualCode(code, state) {
 export async function GET(request, { params }) {
   try {
     const { provider, action } = await params;
+    const disabled = rejectDisabledProvider(provider);
+    if (disabled) return disabled;
     const { searchParams } = new URL(request.url);
 
     if (action === "authorize") {
@@ -296,6 +312,8 @@ export async function GET(request, { params }) {
 export async function POST(request, { params }) {
   try {
     const { provider, action } = await params;
+    const disabled = rejectDisabledProvider(provider);
+    if (disabled) return disabled;
     let body;
     try {
       body = await request.json();
