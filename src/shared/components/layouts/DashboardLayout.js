@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { useNotificationStore } from "@/store/notificationStore";
+import useSettingsStore from "@/store/settingsStore";
+import { useQuotaStore } from "@/store/quotaStore";
 import Sidebar from "../Sidebar";
 import Header from "../Header";
 
@@ -36,6 +38,28 @@ export default function DashboardLayout({ children }) {
   const pathname = usePathname();
   const notifications = useNotificationStore((state) => state.notifications);
   const removeNotification = useNotificationStore((state) => state.removeNotification);
+  const settings = useSettingsStore((state) => state.settings);
+  const fetchSettings = useSettingsStore((state) => state.fetchSettings);
+  const startQuotaPolling = useQuotaStore((state) => state.start);
+  const stopQuotaPolling = useQuotaStore((state) => state.stop);
+  const setQuotaVisible = useQuotaStore((state) => state.setVisible);
+
+  useEffect(() => {
+    fetchSettings();
+  }, [fetchSettings]);
+
+  // Owned here, not in the Header: the Header is remounted on every navigation
+  // (`<Header key={pathname} />` below), so a timer started inside it would be
+  // torn down and restarted on every page change — and every restart is a fresh
+  // pass over the provider list.
+  const quotaChipsOn = settings?.showQuotaInHeader === true;
+  useEffect(() => {
+    if (quotaChipsOn) startQuotaPolling();
+    else stopQuotaPolling();
+    setQuotaVisible(quotaChipsOn);
+  }, [quotaChipsOn, startQuotaPolling, stopQuotaPolling, setQuotaVisible]);
+
+  useEffect(() => () => stopQuotaPolling(), [stopQuotaPolling]);
 
   // Preload heavy usage charts in background when browser is idle
   useEffect(() => {

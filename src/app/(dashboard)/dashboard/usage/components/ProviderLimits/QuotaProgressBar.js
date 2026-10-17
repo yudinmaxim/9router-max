@@ -1,36 +1,9 @@
 "use client";
 
 import { cn } from "@/shared/utils/cn";
-import { formatResetTime } from "./utils";
+import { formatResetTime, getQuotaColors } from "./utils";
 
-// Calculate color based on remaining percentage
-const getColorClasses = (remainingPercentage) => {
-  if (remainingPercentage > 70) {
-    return {
-      text: "text-green-500",
-      bg: "bg-green-500",
-      bgLight: "bg-green-500/10",
-      emoji: "🟢"
-    };
-  }
-  
-  if (remainingPercentage >= 30) {
-    return {
-      text: "text-yellow-500",
-      bg: "bg-yellow-500",
-      bgLight: "bg-yellow-500/10",
-      emoji: "🟡"
-    };
-  }
-  
-  // 0-29% including 0% (out of quota) - show red
-  return {
-    text: "text-red-500",
-    bg: "bg-red-500",
-    bgLight: "bg-red-500/10",
-    emoji: "🔴"
-  };
-};
+const getColorClasses = (remainingPercentage) => getQuotaColors(remainingPercentage);
 
 // Format reset time display
 const formatResetTimeDisplay = (resetTime) => {

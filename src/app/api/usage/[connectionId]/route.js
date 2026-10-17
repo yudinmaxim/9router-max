@@ -130,13 +130,71 @@ export async function refreshAndUpdateCredentials(connection, force = false, pro
 /**
  * GET /api/usage/[connectionId] - Get usage data for a specific connection
  */
+// Server-side quota cache: dedup + short TTL per connection.
+//
+// The dashboard polls this route on its own interval, and the header chips poll
+// it on a second one; without a cache each poll became a round trip to the
+// provider. Anthropic's quota endpoint answers 429 when asked too often, so the
+// saving is not cosmetic. The shape follows the usage cache in
+// open-sse/services/usage/claude.js, and lives on globalThis so a dev reload
+// does not start from an empty map mid-flight.
+//
+// What is cached is the parsed body, never a Response: a Response body can be
+// read once, so handing the same object to two callers would break the second.
+const USAGE_CACHE_TTL_MS = 60_000;
+const usageCache = (globalThis.__n9routerUsageCache ??= new Map());
+
 export async function GET(request, { params }) {
+  const { connectionId } = await params;
+  const force = new URL(request.url).searchParams.get("force") === "1";
+
+  if (!force && connectionId) {
+    const hit = usageCache.get(connectionId);
+    // A cached Response would be unreadable for everyone but the first caller.
+    if (hit?.body && hit.expiresAt > Date.now()) return Response.json(hit.body);
+    if (hit?.promise) return reply(await hit.promise);
+  }
+
+  // The last good read, kept for a soft failure — an upstream that blinks should
+  // not empty a card that had real numbers a minute ago. Read regardless of
+  // `force`: a forced refresh that fails must not also throw away the entry the
+  // next ordinary reader would have been served from.
+  const previous = (connectionId && usageCache.get(connectionId)?.body) || null;
+
+  const promise = (async () => {
+    const res = await resolveUsage(connectionId, force);
+    const text = await res.text().catch(() => "");
+    let body = null;
+    try { body = JSON.parse(text); } catch { /* not JSON — pass through */ }
+    if (connectionId && res.ok && body && !body.error) {
+      usageCache.set(connectionId, { body, expiresAt: Date.now() + USAGE_CACHE_TTL_MS });
+      return { body, status: res.status };
+    }
+    if (previous) {
+      // Put the good read back. Leaving `{ promise }` here instead would pin the
+      // resolved error for the whole TTL and every later reader would get it.
+      usageCache.set(connectionId, { body: previous, expiresAt: Date.now() + USAGE_CACHE_TTL_MS });
+      // A forced refresh reports the failure rather than quietly serving old
+      // numbers: the operator asked to see something current.
+      if (force) return { raw: text, status: res.status };
+      return { body: previous, status: 200 };
+    }
+    usageCache.delete(connectionId);
+    return { raw: text, status: res.status };
+  })();
+
+  if (connectionId) usageCache.set(connectionId, { promise });
+  return reply(await promise);
+}
+
+function reply(out) {
+  if (out.body) return Response.json(out.body, { status: out.status });
+  return new Response(out.raw || "", { status: out.status, headers: { "Content-Type": "application/json" } });
+}
+
+async function resolveUsage(connectionId, force) {
   let connection;
   try {
-    const { connectionId } = await params;
-    const force = new URL(request.url).searchParams.get("force") === "1";
-
-
     // noAuth providers that still have a real usage reader upstream. cursor-acp
 // authenticates to Cursor with the account JWT and its quota — plan spend,
 // bonus spend, utilization — comes from api2.cursor.sh like any other.

@@ -1,4 +1,24 @@
 import { getModelsByProviderId } from "open-sse/config/providerModels.js";
+import {
+  formatResetTime,
+  getQuotaColors,
+  getStatusColor,
+  getStatusEmoji,
+  calculatePercentage,
+  getRemainingPercentage,
+  pickHeaderQuota,
+} from "@/shared/utils/quota";
+
+// Re-exported so the imports that already pointed at utils.js keep working.
+export {
+  formatResetTime,
+  getQuotaColors,
+  getStatusColor,
+  getStatusEmoji,
+  calculatePercentage,
+  getRemainingPercentage,
+  pickHeaderQuota,
+};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 export const QUOTA_CACHE_KEY = "quotaCacheData";
@@ -217,98 +237,6 @@ export function setQuotaCache(connectionId, quotaEntry) {
   } catch (error) {
     console.error("Error writing quota cache:", error);
   }
-}
-
-/**
- * Format ISO date string to countdown format (inspired by vscode-antigravity-cockpit)
- * @param {string|Date} date - ISO date string or Date object
- * @returns {string} Formatted countdown (e.g., "2d 5h 30m", "4h 40m", "15m") or "-"
- */
-export function formatResetTime(date) {
-  if (!date) return "-";
-
-  try {
-    const resetDate = typeof date === "string" ? new Date(date) : date;
-    const now = new Date();
-    const diffMs = resetDate - now;
-
-    if (diffMs <= 0) return "-";
-
-    const totalMinutes = Math.ceil(diffMs / (1000 * 60));
-    
-    // < 60 minutes: show only minutes
-    if (totalMinutes < 60) {
-      return `${totalMinutes}m`;
-    }
-    
-    const totalHours = Math.floor(totalMinutes / 60);
-    const remainingMinutes = totalMinutes % 60;
-    
-    // < 24 hours: show hours and minutes
-    if (totalHours < 24) {
-      return `${totalHours}h ${remainingMinutes}m`;
-    }
-    
-    // >= 24 hours: show days, hours, and minutes
-    const days = Math.floor(totalHours / 24);
-    const remainingHours = totalHours % 24;
-    return `${days}d ${remainingHours}h ${remainingMinutes}m`;
-  } catch (error) {
-    return "-";
-  }
-}
-
-/**
- * Get Tailwind color class based on percentage
- * @param {number} percentage - Remaining percentage (0-100)
- * @returns {string} Color name: "green" | "yellow" | "red"
- */
-export function getStatusColor(percentage) {
-  if (percentage > 70) return "green";
-  if (percentage >= 30) return "yellow";
-  return "red"; // 0-29% including 0% (out of quota) - show red
-}
-
-/**
- * Get status emoji based on percentage
- * @param {number} percentage - Remaining percentage (0-100)
- * @returns {string} Emoji: "🟢" | "🟡" | "🔴"
- */
-export function getStatusEmoji(percentage) {
-  if (percentage > 70) return "🟢";
-  if (percentage >= 30) return "🟡";
-  return "🔴"; // 0-29% including 0% (out of quota) - show red
-}
-
-/**
- * Calculate remaining percentage
- * @param {number} used - Used amount
- * @param {number} total - Total amount
- * @returns {number} Remaining percentage (0-100)
- */
-export function calculatePercentage(used, total) {
-  if (!total || total === 0) return 0;
-  if (!used || used < 0) return 100;
-  if (used >= total) return 0;
-
-  return Math.round(((total - used) / total) * 100);
-}
-
-/**
- * Get remaining percentage from a normalized quota row
- * @param {Object} quota - Normalized quota object
- * @returns {number} Remaining percentage (0-100)
- */
-export function getRemainingPercentage(quota) {
-  if (quota?.remaining !== undefined) {
-    return Math.max(0, Math.round(quota.remaining));
-  }
-
-  if (quota?.remainingPercentage !== undefined) {
-    return Math.round(quota.remainingPercentage);
-  }
-
-  return calculatePercentage(quota?.used, quota?.total);
 }
 
 export function getQuotaVisibilityKey(quota) {

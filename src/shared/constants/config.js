@@ -62,6 +62,20 @@ export const CONSOLE_LOG_CONFIG = {
 // Client-side store TTL: how long fetched data stays fresh before re-fetching
 export const CLIENT_STORE_TTL_MS = 60000;
 
+// Quota chips in the header.
+//
+// The poll interval and the server cache TTL are both one minute on purpose: the
+// server answers from cache for a minute, so a client that polls more often only
+// adds requests to our own gateway, never to the provider. `pollIntervalMs` must
+// not be lowered below `serverCacheTtlMs` or the two disagree and the cache buys
+// nothing.
+export const QUOTA_HEADER_CONFIG = {
+  pollIntervalMs: 60000,
+  serverCacheTtlMs: 60000,
+  // How many accounts to show before collapsing into a single "+N" chip.
+  maxChips: 4,
+};
+
 // Quota auto-ping: keep 5h windows warm by sending a tiny request right after reset.
 export const QUOTA_AUTOPING_CONFIG = {
   tickIntervalMs: 60000,                // scheduler tick

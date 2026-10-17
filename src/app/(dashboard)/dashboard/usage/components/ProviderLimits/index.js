@@ -47,6 +47,7 @@ import Card from "@/shared/components/Card";
 import { ConfirmModal, EditConnectionModal } from "@/shared/components";
 import { USAGE_SUPPORTED_PROVIDERS, AI_PROVIDERS } from "@/shared/constants/providers";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
+import useSettingsStore from "@/store/settingsStore";
 
 // Maps the stored providerSpecificData.authMethod to a human label for Kiro.
 // Values come from the Kiro connect flows: builder-id/idc (device code),
@@ -179,6 +180,12 @@ export default function ProviderLimits() {
   const [hasHydratedAutoRefresh, setHasHydratedAutoRefresh] = useState(false);
   const [refreshingAll, setRefreshingAll] = useState(false);
   const [countdown, setCountdown] = useState(60);
+  const settings = useSettingsStore((s) => s.settings);
+  const patchSettings = useSettingsStore((s) => s.patchSettings);
+  const fetchSettings = useSettingsStore((s) => s.fetchSettings);
+  const showQuotaInHeader = settings?.showQuotaInHeader === true;
+
+  useEffect(() => { fetchSettings(); }, [fetchSettings]);
   const [connectionsLoading, setConnectionsLoading] = useState(true);
   const [deletingId, setDeletingId] = useState(null);
   const [togglingId, setTogglingId] = useState(null);
@@ -1069,6 +1076,28 @@ export default function ProviderLimits() {
               check_circle
             </span>
             <span className="hidden sm:inline">Turn on Available</span>
+          </button>
+
+          {/* Header quota chips (settings.showQuotaInHeader) */}
+          <button
+            type="button"
+            onClick={() => patchSettings({ showQuotaInHeader: !showQuotaInHeader })}
+            className="flex h-8 shrink-0 items-center gap-1 rounded-lg border border-black/10 px-2 text-xs transition-colors hover:bg-black/5 dark:border-white/10 dark:hover:bg-white/5"
+            title={showQuotaInHeader
+              ? "Hide quota chips in the header"
+              : "Show quota chips in the header"}
+            aria-pressed={showQuotaInHeader}
+          >
+            <span
+              className={`material-symbols-outlined text-[14px] ${
+                showQuotaInHeader ? "text-primary" : "text-text-muted"
+              }`}
+            >
+              {showQuotaInHeader ? "toggle_on" : "toggle_off"}
+            </span>
+            <span className="hidden text-text-primary sm:inline">
+              Header chips
+            </span>
           </button>
 
           {/* Auto-refresh toggle */}
