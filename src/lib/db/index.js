@@ -3,6 +3,11 @@ import { getAdapter } from "./driver.js";
 import { stringifyJson, parseJson } from "./helpers/jsonCol.js";
 import { keyAccessFromColumns, keyAccessToColumns, validateKeyAccessInput } from "@/shared/utils/keyAccess.js";
 import { KEY_ACCESS_UNRESTRICTED } from "@/shared/constants/keyAccess.js";
+import { poolIdentity, scrubTokenFreshness } from "./transfer.js";
+
+// kv scopes a transfer covers. Anything outside this list stays put on import,
+// which is what keeps usage history and request details out of a restore.
+const KV_SCOPES = ["modelAliases", "customModels", "mitmAlias", "pricing"];
 
 // Settings
 export {
@@ -95,38 +100,62 @@ export async function exportDb() {
     customModels: [],
     mitmAlias: {},
     pricing: {},
+    disabledModels: {},
   };
 
   for (const r of db.all(`SELECT key, value FROM kv WHERE scope = 'modelAliases'`)) out.modelAliases[r.key] = parseJson(r.value);
   for (const r of db.all(`SELECT key, value FROM kv WHERE scope = 'customModels'`)) out.customModels.push(parseJson(r.value));
   for (const r of db.all(`SELECT key, value FROM kv WHERE scope = 'mitmAlias'`)) out.mitmAlias[r.key] = parseJson(r.value);
   for (const r of db.all(`SELECT key, value FROM kv WHERE scope = 'pricing'`)) out.pricing[r.key] = parseJson(r.value);
+  // disabledModels used to be exported by nobody and imported by nobody, so the
+  // file was neither a full restore nor a clean replace — it silently dropped
+  // the operator's own model selections.
+  for (const r of db.all(`SELECT key, value FROM kv WHERE scope = 'disabledModels'`)) out.disabledModels[r.key] = parseJson(r.value);
 
   return out;
 }
 
-export async function importDb(payload) {
+export async function importDb(payload, options = {}) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error("Invalid database payload");
   }
-  const db = await getAdapter();
+  const strategy = options.strategy === "merge" ? "merge" : "replace";
+  // A failed import used to be unrecoverable: the transaction below wipes every
+  // table first and there was nothing to go back to. Take a copy first, always —
+  // it costs one file write against an observability-exempt copy of the DB.
+  let backupPath = null;
+  try {
+    const { backupDbLite, makeBackupDir } = await import("./backup.js");
+    backupPath = backupDbLite(await getAdapter(), makeBackupDir("pre-import"));
+  } catch (backupError) {
+    console.warn("[Import] pre-import backup failed:", backupError?.message || backupError);
+  }
 
-  db.transaction(() => {
-    // Wipe all tables (keep _meta)
-    db.run(`DELETE FROM settings`);
-    db.run(`DELETE FROM providerConnections`);
-    db.run(`DELETE FROM providerNodes`);
-    db.run(`DELETE FROM proxyPools`);
-    db.run(`DELETE FROM apiKeys`);
-    db.run(`DELETE FROM combos`);
-    db.run(`DELETE FROM kv WHERE scope IN ('modelAliases', 'customModels', 'mitmAlias', 'pricing')`);
+  const db = await getAdapter();
+  const carriesSecrets = options.carriesSecrets === true;
+  const poolIdentities = new Set(
+    db.all(`SELECT * FROM proxyPools`).map((r) => poolIdentity(parseJson(r.data, {})))
+  );
+
+  const result = db.transaction(() => {
+    if (strategy === "replace") {
+      // Wipe all tables (keep _meta)
+      db.run(`DELETE FROM settings`);
+      db.run(`DELETE FROM providerConnections`);
+      db.run(`DELETE FROM providerNodes`);
+      db.run(`DELETE FROM proxyPools`);
+      db.run(`DELETE FROM apiKeys`);
+      db.run(`DELETE FROM combos`);
+      db.run(`DELETE FROM kv WHERE scope IN ('${KV_SCOPES.join("', '")}', 'disabledModels')`);
+    }
 
     // Settings
     if (payload.settings) {
       db.run(`INSERT INTO settings(id, data) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`, [stringifyJson(payload.settings)]);
     }
 
-    for (const c of payload.providerConnections || []) {
+    for (const raw of payload.providerConnections || []) {
+      const c = carriesSecrets ? scrubTokenFreshness(raw) : raw;
       const { id, provider, authType, name, email, priority, isActive, createdAt, updatedAt, ...rest } = c;
       db.run(
         `INSERT OR REPLACE INTO providerConnections(id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -141,6 +170,14 @@ export async function importDb(payload) {
       );
     }
     for (const p of payload.proxyPools || []) {
+      // Merge deduplicates on identity, not on id: the same pool copied to a
+      // second machine gets a new row id, and without this every import would
+      // stack a duplicate of every pool onto the target.
+      if (strategy === "merge") {
+        const identity = poolIdentity(p);
+        if (identity !== "|" && poolIdentities.has(identity)) continue;
+        poolIdentities.add(identity);
+      }
       const { id, isActive, testStatus, createdAt, updatedAt, ...rest } = p;
       db.run(
         `INSERT OR REPLACE INTO proxyPools(id, isActive, testStatus, data, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?)`,
@@ -148,6 +185,7 @@ export async function importDb(payload) {
       );
     }
     for (const k of payload.apiKeys || []) {
+      if (!k.key) continue;
       // Per-key access: a backup without `access` (older version) restores
       // unrestricted, exactly as before; a malformed `access` is refused.
       let access = KEY_ACCESS_UNRESTRICTED;
@@ -181,9 +219,15 @@ export async function importDb(payload) {
     for (const [provider, models] of Object.entries(payload.pricing || {})) {
       db.run(`INSERT OR REPLACE INTO kv(scope, key, value) VALUES('pricing', ?, ?)`, [provider, stringifyJson(models || {})]);
     }
+    for (const [provider, models] of Object.entries(payload.disabledModels || {})) {
+      db.run(
+        `INSERT INTO kv(scope, key, value) VALUES('disabledModels', ?, ?) ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`,
+        [provider, stringifyJson(models || {})]
+      );
+    }
   });
 
-  return await exportDb();
+  return { ...(await exportDb()), _strategy: strategy, _backupPath: backupPath };
 }
 
 // Eager init helper (optional)

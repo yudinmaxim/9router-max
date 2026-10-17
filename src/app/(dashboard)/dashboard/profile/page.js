@@ -34,6 +34,11 @@ export default function ProfilePage() {
   const [dbStatus, setDbStatus] = useState({ type: "", message: "" });
   const [dbAuth, setDbAuth] = useState({ open: false, mode: "", password: "" });
   const pendingImportRef = useRef(null);
+  // "config" is the safe default: a download should not hand out credentials
+  // just because the operator pressed the button.
+  const [exportMode, setExportMode] = useState("config");
+  const [includeRouterKeys, setIncludeRouterKeys] = useState(false);
+  const [importStrategy, setImportStrategy] = useState("replace");
   const [oidcForm, setOidcForm] = useState({
     authMode: "password",
     oidcIssuerUrl: "",
@@ -664,7 +669,9 @@ export default function ProfilePage() {
     setDbLoading(true);
     setDbStatus({ type: "", message: "" });
     try {
-      const res = await fetch("/api/settings/database", {
+      const query = new URLSearchParams({ mode: exportMode });
+      if (exportMode === "full" && includeRouterKeys) query.set("includeRouterKeys", "1");
+      const res = await fetch(`/api/settings/database?${query}`, {
         headers: { "x-9r-password": password },
       });
       if (!res.ok) {
@@ -679,13 +686,18 @@ export default function ProfilePage() {
       const anchor = document.createElement("a");
       const stamp = new Date().toISOString().replace(/[.:]/g, "-");
       anchor.href = url;
-      anchor.download = `9router-backup-${stamp}.json`;
+      anchor.download = `9router-${exportMode}-${stamp}.json`;
       document.body.appendChild(anchor);
       anchor.click();
       document.body.removeChild(anchor);
       URL.revokeObjectURL(url);
 
-      setDbStatus({ type: "success", message: "Database backup downloaded" });
+      setDbStatus({
+        type: "success",
+        message: exportMode === "full"
+          ? "Config with credentials downloaded — this file contains tokens, do not share it"
+          : "Config downloaded — no credentials in it",
+      });
     } catch (err) {
       setDbStatus({ type: "error", message: err.message || "Failed to export database" });
     } finally {
@@ -708,12 +720,11 @@ export default function ProfilePage() {
     setDbLoading(true);
     try {
       const raw = await file.text();
-      const payload = JSON.parse(raw);
 
       const res = await fetch("/api/settings/database", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, password }),
+        body: JSON.stringify({ file: raw, password, strategy: importStrategy }),
       });
 
       const data = await res.json().catch(() => ({}));
@@ -722,7 +733,15 @@ export default function ProfilePage() {
       }
 
       await reloadSettings();
-      setDbStatus({ type: "success", message: "Database imported successfully" });
+      const warnings = Array.isArray(data.warnings) && data.warnings.length
+        ? ` (${data.warnings.join(" ")})`
+        : "";
+      setDbStatus({
+        type: data.legacy ? "error" : "success",
+        message: data.legacy
+          ? `Imported as a FULL transfer — this file has no format header and predates secret-free exports. Do not share it.${warnings}`
+          : `Config imported (${importStrategy})${warnings}`,
+      });
     } catch (err) {
       setDbStatus({ type: "error", message: err.message || "Invalid backup file" });
     } finally {
@@ -806,6 +825,99 @@ export default function ProfilePage() {
                 <p className="text-xs sm:text-sm text-text-muted font-mono break-all">~/.9router/db/data.sqlite</p>
               </div>
             </div>
+            <div className="flex flex-col gap-3 rounded-lg bg-bg border border-border p-3">
+              <div className="flex flex-col gap-1">
+                <p className="font-medium text-sm sm:text-base">Export mode</p>
+                <p className="text-xs text-text-muted">
+                  Credentials are stored unencrypted, so this choice is what decides whether the
+                  file is safe to hand to someone.
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className={`flex cursor-pointer items-start gap-2 rounded-lg border p-2.5 ${exportMode === "config" ? "border-primary bg-primary/5" : "border-border"}`}>
+                  <input
+                    type="radio"
+                    name="export-mode"
+                    checked={exportMode === "config"}
+                    onChange={() => setExportMode("config")}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium">Config</span>
+                    <span className="block text-xs text-text-muted">
+                      Connections without tokens, settings, aliases, disabled models, combos.
+                      Shareable.
+                    </span>
+                  </span>
+                </label>
+                <label className={`flex cursor-pointer items-start gap-2 rounded-lg border p-2.5 ${exportMode === "full" ? "border-amber-500 bg-amber-500/5" : "border-border"}`}>
+                  <input
+                    type="radio"
+                    name="export-mode"
+                    checked={exportMode === "full"}
+                    onChange={() => setExportMode("full")}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium">Full transfer</span>
+                    <span className="block text-xs text-text-muted">
+                      Adds every token, for moving to your own second machine. Treat the file
+                      as a secret.
+                    </span>
+                  </span>
+                </label>
+              </div>
+              {exportMode === "full" && (
+                <label className="flex cursor-pointer items-start gap-2 text-xs text-text-muted">
+                  <input
+                    type="checkbox"
+                    checked={includeRouterKeys}
+                    onChange={(e) => setIncludeRouterKeys(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    Also include router keys (<code>sk-…</code>). They are checked by plain string
+                    comparison, so a file carrying one is a complete key to this gateway.
+                  </span>
+                </label>
+              )}
+              <div className="flex flex-col gap-1 border-t border-border pt-3">
+                <p className="font-medium text-sm sm:text-base">Import strategy</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className={`flex cursor-pointer items-start gap-2 rounded-lg border p-2.5 ${importStrategy === "replace" ? "border-primary bg-primary/5" : "border-border"}`}>
+                    <input
+                      type="radio"
+                      name="import-strategy"
+                      checked={importStrategy === "replace"}
+                      onChange={() => setImportStrategy("replace")}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <span className="block text-sm font-medium">Replace</span>
+                      <span className="block text-xs text-text-muted">
+                        Wipe the current tables and write this file. A backup is taken first.
+                      </span>
+                    </span>
+                  </label>
+                  <label className={`flex cursor-pointer items-start gap-2 rounded-lg border p-2.5 ${importStrategy === "merge" ? "border-primary bg-primary/5" : "border-border"}`}>
+                    <input
+                      type="radio"
+                      name="import-strategy"
+                      checked={importStrategy === "merge"}
+                      onChange={() => setImportStrategy("merge")}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <span className="block text-sm font-medium">Merge on top</span>
+                      <span className="block text-xs text-text-muted">
+                        Add without wiping. Pools already present are matched on URL and no-proxy
+                        list, so nothing is duplicated.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+            </div>
             <div className="flex flex-col sm:flex-row gap-2">
               <Button
                 variant="secondary"
@@ -814,7 +926,7 @@ export default function ProfilePage() {
                 loading={dbLoading}
                 className="w-full sm:w-auto"
               >
-                Download Backup
+                Download Config
               </Button>
               <Button
                 variant="outline"
@@ -823,7 +935,7 @@ export default function ProfilePage() {
                 disabled={dbLoading}
                 className="w-full sm:w-auto"
               >
-                Import Backup
+                Import Config
               </Button>
               <input
                 ref={importFileRef}

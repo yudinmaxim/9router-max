@@ -160,7 +160,7 @@ export default function NewProviderPage() {
               value={formData.apiKey}
               onChange={(e) => handleChange("apiKey", e.target.value)}
               error={errors.apiKey}
-              hint="Your API key will be encrypted and stored securely."
+              hint="Stored in the local database on this machine. It is not encrypted at rest — anyone who can read the database file can read the key."
               required
             />
           )}
