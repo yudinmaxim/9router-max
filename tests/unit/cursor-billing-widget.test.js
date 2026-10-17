@@ -90,28 +90,6 @@ describe("Cursor plan limits", () => {
   });
 });
 
-describe("Cursor Grok pool", () => {
-  it("reports the pool Cursor does send", async () => {
-    const { cursorGrokPool } = await import("open-sse/services/usage/cursor.js");
-    const pool = cursorGrokPool({
-      currentPeriodStart: "2026-10-15T00:00:00Z",
-      usagePercent: 0,
-      hasAvailableUsage: true,
-      grokPlanLabel: "Grok Bot Plan",
-      cursorPlanName: "Pro",
-      onDemandSettings: { visible: true, eligible: true },
-    });
-    expect(pool.pct).toBe(0);
-    expect(pool.hasAvailableUsage).toBe(true);
-    expect(pool.label).toBe("Grok Bot Plan");
-    expect(pool.includedInPlan).toBe("Pro");
-    // The account says "Resets weekly"; the response carries no reset moment,
-    // so the widget states the cadence and invents no date.
-    expect(pool.resetsWeekly).toBe(true);
-    expect(pool).not.toHaveProperty("resetAt");
-  });
-});
-
 describe("Cursor model classification", () => {
   it("follows Cursor's own list instead of a name pattern", async () => {
     const { classifyByProviderList } = await import("@/lib/quotaTiers");

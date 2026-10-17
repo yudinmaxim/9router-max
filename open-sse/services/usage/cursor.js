@@ -263,35 +263,6 @@ export function cursorPlanLimits(planUsage, planInfo) {
   };
 }
 
-/**
- * Grok's own allowance, as far as Cursor reports it.
- *
- * GetSandUsageStatus is the only endpoint that answers this, and it is a
- * separate pool from the plan usage above: its period starts with the billing
- * cycle, not the week. Whether it is the same weekly allowance the account sees
- * in the UI is not something the response states, so the widget labels it as
- * Cursor's figure rather than claiming it is the account's.
- */
-export function cursorGrokPool(sandUsage) {
-  const s = sandUsage || {};
-  const pct = num(s.usagePercent, Number.NaN);
-  return {
-    pct: Number.isFinite(pct) ? Number(pct.toFixed(2)) : null,
-    hasAvailableUsage: s.hasAvailableUsage === true,
-    label: s.grokPlanLabel || null,
-    // "Included in Pro" is what the account shows, and cursorPlanName is the
-    // plan it is included in — so the Grok pool is bundled, not billed on top.
-    includedInPlan: s.cursorPlanName || null,
-    // "Resets weekly" is the account's own wording, not a field in the response:
-    // currentPeriodStart there is the billing cycle start and says nothing about
-    // the weekly rollover. The weekly claim is carried; the reset moment is not,
-    // because no endpoint sends it and a guessed date would be worse than none.
-    resetsWeekly: true,
-    onDemandVisible: s.onDemandSettings?.visible === true,
-    onDemandEligible: s.onDemandSettings?.eligible === true,
-  };
-}
-
 export async function getCursorUsage(accessToken = null, providerSpecificData = null) {
   const token = typeof accessToken === "string" ? accessToken.trim() : "";
   if (!token) {
@@ -350,12 +321,8 @@ export async function getCursorUsage(accessToken = null, providerSpecificData = 
     // are fetched after the main call has already succeeded, and each answer is
     // allowed to be missing — a widget that knows its spend but not its plan
     // name is still worth showing.
-    const [planInfo, sandUsage] = await Promise.all([
-      dashboardRpc(token, machineId, "GetPlanInfo"),
-      dashboardRpc(token, machineId, "GetSandUsageStatus"),
-    ]);
+    const planInfo = await dashboardRpc(token, machineId, "GetPlanInfo");
     parsed.planLimits = cursorPlanLimits(data.planUsage || data.plan_usage, planInfo);
-    parsed.grokPool = cursorGrokPool(sandUsage);
     return parsed;
   } catch (error) {
     return { message: `Cursor usage error: ${error.message}` };

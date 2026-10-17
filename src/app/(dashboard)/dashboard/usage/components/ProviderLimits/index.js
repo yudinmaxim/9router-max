@@ -1360,7 +1360,6 @@ export default function ProviderLimits() {
                   <CursorQuotaWidget
                     spendBars={quota.spendBars}
                     planLimits={quota.planLimits}
-                    grokPool={quota.grokPool}
                     translate={translate}
                   />
                 ) : quota?.localUsage ? (

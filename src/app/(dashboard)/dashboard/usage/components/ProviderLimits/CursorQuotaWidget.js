@@ -52,7 +52,7 @@ function AllowBar({ label, pct, note, muted }) {
   );
 }
 
-export default function CursorQuotaWidget({ spendBars, planLimits, grokPool, translate }) {
+export default function CursorQuotaWidget({ spendBars, planLimits, translate }) {
   if (!spendBars) return null;
   const limits = planLimits || null;
   const cycleEnd = limits?.cycleEnd
@@ -104,20 +104,6 @@ export default function CursorQuotaWidget({ spendBars, planLimits, grokPool, tra
           label={translate("Other models")}
           pct={spendBars?.otherModels?.pct}
           note={translate("Named models, on a separate allowance")}
-        />
-        <AllowBar
-          label={grokPool?.label || translate("Grok Bot")}
-          pct={grokPool?.pct}
-          muted={translate("Not reported by Cursor")}
-          note={[
-            grokPool?.includedInPlan
-              ? translate("Included in ") + grokPool.includedInPlan
-              : null,
-            grokPool?.resetsWeekly ? translate("resets weekly") : null,
-            grokPool?.hasAvailableUsage === false ? translate("paused at the limit") : null,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
         />
       </div>
 
