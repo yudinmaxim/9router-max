@@ -234,11 +234,7 @@ describe("PR #1175 - integration with compressMessages", () => {
     const text = padding + "added 47 packages, and audited 48 packages in 13s\n4 vulnerabilities (2 moderate, 2 critical)\nRun `npm audit` for details.";
     expect(text.length).toBeGreaterThan(MIN_COMPRESS_SIZE);
     const body = buildBody(text);
-    const stats = compressMessages(body, true);
-    expect(stats).toBeTruthy();
-    expect(stats.hits.length).toBe(1);
-    expect(stats.hits[0].filter).toBe("build-output");
-    expect(stats.bytesAfter).toBeLessThan(stats.bytesBefore);
+    compressMessages(body, true);
     const compressed = body.messages[0].content[0].content;
     expect(compressed).toContain("... +17 more deprecated packages");
   });
@@ -247,8 +243,7 @@ describe("PR #1175 - integration with compressMessages", () => {
     const text = "npm warn deprecated foo\nadded 1 package";
     expect(text.length).toBeLessThan(MIN_COMPRESS_SIZE);
     const body = buildBody(text);
-    const stats = compressMessages(body, true);
-    expect(stats.hits.length).toBe(0);
+    compressMessages(body, true);
     expect(body.messages[0].content[0].content).toBe(text);
   });
 
@@ -256,7 +251,7 @@ describe("PR #1175 - integration with compressMessages", () => {
     // Pathological: every line is something buildOutput keeps verbatim
     const text = "npm ERR! error line 1\nnpm ERR! error line 2\nnpm ERR! error line 3\n".repeat(20);
     const body = buildBody(text);
-    const stats = compressMessages(body, true);
+    compressMessages(body, true);
     // either no hit (grew) or hit and shrunk
     const after = body.messages[0].content[0].content;
     expect(after.length).toBeLessThanOrEqual(text.length);
@@ -274,8 +269,7 @@ describe("PR #1175 - integration with compressMessages", () => {
         }
       ]
     };
-    const stats = compressMessages(body, true);
-    expect(stats.hits.length).toBe(0);
+    compressMessages(body, true);
     expect(body.messages[0].content[0].content).toBe(text);
   });
 });

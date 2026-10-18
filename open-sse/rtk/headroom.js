@@ -29,22 +29,6 @@ function messagePayload(body) {
   return null;
 }
 
-function captureSizeSnapshot(body) {
-  const messages = messagePayload(body);
-  const toolHistory = messages?.filter((message) =>
-    message?.role === "tool"
-    || message?.role === "function"
-    || message?.tool_calls?.length
-    || message?.content?.some?.((part) => part?.type === "tool_use" || part?.type === "tool_result")
-  ) || [];
-  return {
-    bodyBytes: jsonBytes(body),
-    messageBytes: messages ? jsonBytes(messages) : 0,
-    toolSchemaBytes: jsonBytes(body?.tools || []),
-    toolHistoryBytes: jsonBytes(toolHistory),
-  };
-}
-
 function setDiagnostic(diagnostics, reason) {
   if (diagnostics && !diagnostics.reason) diagnostics.reason = reason;
 }
@@ -261,7 +245,6 @@ export async function compressWithHeadroom(body, { enabled, url, model, format, 
   }
 
   try {
-    if (diagnostics) diagnostics.before = captureSizeSnapshot(body);
 
     // Claude shape: translate → OpenAI → compress → translate back.
     if (format === "claude") {
@@ -275,7 +258,6 @@ export async function compressWithHeadroom(body, { enabled, url, model, format, 
       const claudeBody = openaiToClaudeRequest(model, { ...oai, messages: data.messages }, false);
       if (Array.isArray(claudeBody?.messages)) body.messages = claudeBody.messages;
       if (claudeBody?.system !== undefined) body.system = claudeBody.system;
-      if (diagnostics) diagnostics.after = captureSizeSnapshot(body);
       return data;
     }
 
@@ -302,7 +284,6 @@ export async function compressWithHeadroom(body, { enabled, url, model, format, 
         false
       );
       if (Array.isArray(responsesBody?.input)) body.input = responsesBody.input;
-      if (diagnostics) diagnostics.after = captureSizeSnapshot(body);
       return data;
     }
 
@@ -318,7 +299,6 @@ export async function compressWithHeadroom(body, { enabled, url, model, format, 
       const data = await callCompress(url, projection.messages, model, timeoutMs, compressUserMessages, diagnostics || {});
       if (!data) return null;
       if (!applyKiroHeadroomMessages(projection, data.messages, diagnostics)) return null;
-      if (diagnostics) diagnostics.after = captureSizeSnapshot(body);
       return data;
     }
 
@@ -333,7 +313,6 @@ export async function compressWithHeadroom(body, { enabled, url, model, format, 
     const data = await callCompress(url, body[key], model, timeoutMs, compressUserMessages, diagnostics || {});
     if (!data) return null;
     body[key] = data.messages;
-    if (diagnostics) diagnostics.after = captureSizeSnapshot(body);
     return data;
   } catch (error) {
     setDiagnostic(diagnostics, `unexpected error: ${error?.message || String(error)}`);
@@ -341,29 +320,3 @@ export async function compressWithHeadroom(body, { enabled, url, model, format, 
   }
 }
 
-export function formatHeadroomLog(stats) {
-  if (!stats) return null;
-  const before = stats.tokens_before || 0;
-  const after = stats.tokens_after || 0;
-  const delta = stats.tokens_saved || 0;
-  const pct = before > 0 ? ((delta / before) * 100).toFixed(1) : "0";
-  return `reported token delta=${delta} before=${before}${after ? ` after=${after}` : ""} (${pct}%)`.trim();
-}
-
-export function formatHeadroomSizeLog(diagnostics) {
-  const before = diagnostics?.before;
-  const after = diagnostics?.after;
-  if (!before || !after) return "";
-  const effective = before.bodyBytes > 0
-    ? (((before.bodyBytes - after.bodyBytes) / before.bodyBytes) * 100).toFixed(1)
-    : "0.0";
-  return `body=${before.bodyBytes}B→${after.bodyBytes}B messages=${before.messageBytes}B→${after.messageBytes}B tools=${before.toolSchemaBytes || 0}B→${after.toolSchemaBytes || 0}B toolHistory=${before.toolHistoryBytes || 0}B→${after.toolHistoryBytes || 0}B effective=${effective}%`;
-}
-
-export function isHeadroomPhantomSavings(stats, diagnostics, minShrinkRatio = 0.05) {
-  if (!stats?.tokens_saved || stats.tokens_saved <= 0) return false;
-  const before = diagnostics?.before?.bodyBytes || 0;
-  const after = diagnostics?.after?.bodyBytes || 0;
-  if (before <= 0 || after <= 0) return false;
-  return after >= before * (1 - minShrinkRatio);
-}

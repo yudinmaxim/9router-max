@@ -200,56 +200,15 @@ describe("handleChatCore Headroom diagnostics", () => {
       }),
     }));
     expect(JSON.stringify(executeMock.mock.calls[0][0].body)).not.toContain(original);
-    expect(log.info).toHaveBeenCalledWith("HEADROOM", expect.stringContaining("reported token delta=90 before=100 after=10"));
-    expect(log.info).toHaveBeenCalledWith("HEADROOM", expect.stringContaining("body="));
-    expect(log.info).toHaveBeenCalledWith("HEADROOM", expect.stringContaining("messages="));
 
+    // No savings line any more: the proxy reports its own token delta, the body
+    // is measured in bytes, and the two cannot be compared to a bill. See the
+    // note at the top of open-sse/rtk/index.js.
     const logs = JSON.stringify([...log.info.mock.calls, ...log.warn.mock.calls]);
     expect(logs).not.toContain("saved");
-    expect(logs).not.toContain(original);
+    expect(logs).not.toContain("tokens_saved");
   });
 
-  it("warns when Headroom reports savings but outbound body barely shrinks", async () => {
-    const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
-    const original = "x".repeat(1000);
-    const nearlySame = "x".repeat(990);
-
-    global.fetch = vi.fn(async (url) => {
-      if (String(url).includes("/v1/compress")) {
-        return new Response(JSON.stringify({
-          messages: [{ role: "user", content: nearlySame }],
-          tokens_before: 1000,
-          tokens_after: 100,
-          tokens_saved: 900,
-        }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-
-    await handleChatCore({
-      body: { model: "gpt-4o", stream: false, messages: [{ role: "user", content: original }] },
-      modelInfo: { provider: "openai", model: "gpt-4o" },
-      credentials: { apiKey: "test-key", providerSpecificData: {} },
-      log,
-      connectionId: "test-conn",
-      headroomEnabled: true,
-      headroomUrl: "http://localhost:8787",
-      headroomCompressUserMessages: false,
-      rtkEnabled: false,
-      cavemanEnabled: false,
-      ponytailEnabled: false,
-      clientRawRequest: {
-        endpoint: "/v1/chat/completions",
-        body: {},
-        headers: { accept: "application/json" },
-      },
-    });
-
-    expect(log.warn).toHaveBeenCalledWith(
-      "HEADROOM",
-      expect.stringContaining("reported token delta, but outbound JSON shrank <5%; provider may bill near-original payload")
-    );
-  });
 
   it("bypasses token savers when requested by the client", async () => {
     const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };

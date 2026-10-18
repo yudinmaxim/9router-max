@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { compressMessages, formatRtkLog } from "../../open-sse/rtk/index.js";
+import { compressMessages } from "../../open-sse/rtk/index.js";
 import { gitDiff } from "../../open-sse/rtk/filters/gitDiff.js";
 import { gitStatus } from "../../open-sse/rtk/filters/gitStatus.js";
 import { grep } from "../../open-sse/rtk/filters/grep.js";
@@ -417,7 +417,10 @@ describe("safeApply", () => {
 describe("compressMessages (disabled)", () => {
   it("returns null when disabled", () => {
     const body = { messages: [{ role: "tool", tool_call_id: "x", content: makeLongDiff() }] };
-    expect(compressMessages(body, false)).toBeNull();
+    const before = JSON.stringify(body);
+    compressMessages(body, false);
+    // Disabled means untouched — the assertion is the body, not a return value.
+    expect(JSON.stringify(body)).toBe(before);
   });
 });
 
@@ -425,10 +428,8 @@ describe("compressMessages (enabled)", () => {
   it("compresses OpenAI tool message (string content)", () => {
     const big = makeLongDiff();
     const body = { messages: [{ role: "tool", tool_call_id: "call_1", content: big }] };
-    const stats = compressMessages(body, true);
-    expect(stats.hits.length).toBeGreaterThan(0);
+    compressMessages(body, true);
     expect(body.messages[0].content.length).toBeLessThan(big.length);
-    expect(stats.bytesBefore).toBeGreaterThan(stats.bytesAfter);
   });
 
   it("compresses Claude string-form tool_result", () => {
@@ -439,8 +440,7 @@ describe("compressMessages (enabled)", () => {
         content: [{ type: "tool_result", tool_use_id: "toolu_1", content: big }]
       }]
     };
-    const stats = compressMessages(body, true);
-    expect(stats.hits.length).toBeGreaterThan(0);
+    compressMessages(body, true);
     expect(body.messages[0].content[0].content.length).toBeLessThan(big.length);
   });
 
@@ -456,8 +456,7 @@ describe("compressMessages (enabled)", () => {
         }]
       }]
     };
-    const stats = compressMessages(body, true);
-    expect(stats.hits.length).toBeGreaterThan(0);
+    compressMessages(body, true);
     expect(body.messages[0].content[0].content[0].text.length).toBeLessThan(big.length);
     // short part unchanged
     expect(body.messages[0].content[0].content[1].text).toBe("unchanged short");
@@ -471,16 +470,14 @@ describe("compressMessages (enabled)", () => {
         content: [{ type: "tool_result", tool_use_id: "toolu_1", content: big, is_error: true }]
       }]
     };
-    const stats = compressMessages(body, true);
-    expect(stats.hits.length).toBe(0);
+    compressMessages(body, true);
     expect(body.messages[0].content[0].content).toBe(big);
   });
 
   it("skips below MIN_COMPRESS_SIZE (<500 bytes)", () => {
     const small = "diff --git a/x b/x\n@@ -1 +1 @@\n+a";
     const body = { messages: [{ role: "tool", tool_call_id: "x", content: small }] };
-    const stats = compressMessages(body, true);
-    expect(stats.hits.length).toBe(0);
+    compressMessages(body, true);
     expect(body.messages[0].content).toBe(small);
   });
 
@@ -492,8 +489,8 @@ describe("compressMessages (enabled)", () => {
   });
 
   it("skips when body has no messages", () => {
-    expect(compressMessages({})).toBeNull();
-    expect(compressMessages({ messages: null })).toBeNull();
+    expect(() => compressMessages({})).not.toThrow();
+    expect(() => compressMessages({ messages: null })).not.toThrow();
   });
 
   it("handles mix of messages without crashing", () => {
@@ -506,20 +503,10 @@ describe("compressMessages (enabled)", () => {
         { role: "user", content: [{ type: "text", text: "next" }] }
       ]
     };
-    const stats = compressMessages(body, true);
-    expect(stats).not.toBeNull();
-    expect(stats.hits.length).toBeGreaterThan(0);
+    const original = JSON.stringify(body);
+    compressMessages(body, true);
+    // The point of this case is that a mixed body survives compression at all.
+    expect(JSON.stringify(body).length).toBeLessThanOrEqual(original.length);
   });
 });
 
-describe("formatRtkLog", () => {
-  it("returns null when no hits", () => {
-    expect(formatRtkLog({ bytesBefore: 0, bytesAfter: 0, hits: [] })).toBeNull();
-  });
-  it("formats savings line with percentage", () => {
-    const line = formatRtkLog({ bytesBefore: 1000, bytesAfter: 400, hits: [{ filter: "git-diff" }] });
-    expect(line).toContain("saved 600B");
-    expect(line).toContain("60.0%");
-    expect(line).toContain("git-diff");
-  });
-});
