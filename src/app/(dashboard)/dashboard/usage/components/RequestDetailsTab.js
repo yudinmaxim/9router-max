@@ -7,6 +7,8 @@ import Drawer from "@/shared/components/Drawer";
 import Pagination from "@/shared/components/Pagination";
 import { cn } from "@/shared/utils/cn";
 import { AI_PROVIDERS, getProviderByAlias } from "@/shared/constants/providers";
+import ProviderIcon from "@/shared/components/ProviderIcon";
+import { getProviderIconSrc } from "@/shared/utils/providerIcon";
 
 let providerNameCache = null;
 let providerNodesCache = null;
@@ -291,9 +293,27 @@ export default function RequestDetailsTab() {
                     <td className="max-w-[260px] truncate p-4 font-mono text-sm text-text-main">
                       {detail.model}
                     </td>
-                    <td className="max-w-[180px] truncate p-4 text-sm text-text-main">
-                       <span className="font-medium">
-                         {getProviderName(detail.provider, providerNameCache)}
+                    <td className="max-w-[200px] p-4 text-sm">
+                       {/* The provider is what answers the question "through whom
+                           is the agent working", and a bare word in a column two
+                           to the right of the model is easy to miss. Same icon
+                           and brand colour as the topology node and the header
+                           chips, so one provider looks the same everywhere. */}
+                       <span className="flex min-w-0 items-center gap-1.5">
+                         <ProviderIcon
+                           src={getProviderIconSrc(detail.provider)}
+                           alt={detail.provider}
+                           size={16}
+                           className="size-4 shrink-0 rounded object-contain"
+                           fallbackText={(detail.provider || "?").slice(0, 2).toUpperCase()}
+                         />
+                         <span
+                           className="truncate font-medium"
+                           style={{ color: AI_PROVIDERS[detail.provider]?.color }}
+                           title={getProviderName(detail.provider, providerNameCache)}
+                         >
+                           {getProviderName(detail.provider, providerNameCache)}
+                         </span>
                        </span>
                      </td>
                     <td className="p-4 text-sm text-text-main text-right font-mono">

@@ -3,6 +3,7 @@ import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/con
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
+import { NOAUTH_CONNECTION_ID as SHARED_NOAUTH_CONNECTION_ID } from "@/shared/constants/noauth.js";
 import { getAntigravityQuotaCache, getAntigravityModelQuota } from "./antigravityQuota.js";
 import * as log from "../utils/logger.js";
 
@@ -13,7 +14,7 @@ const GITHUB_MONTHLY_USAGE_LIMIT = "you've reached your additional usage limit f
 
 // Synthetic connection id handed out to free providers that need no credentials.
 // There is no DB row behind it, so nothing can be persisted for it.
-const NOAUTH_CONNECTION_ID = "noauth";
+const NOAUTH_CONNECTION_ID = SHARED_NOAUTH_CONNECTION_ID;
 
 function githubMonthlyResetMs(status, errorText, provider) {
   if (resolveProviderId(provider) !== "github" || Number(status) !== 402) return null;
@@ -64,7 +65,17 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       const resolvedProxy = await resolveConnectionProxyConfig({ proxyPoolId: pickedId || "" });
 return {
       id: NOAUTH_CONNECTION_ID,
-        connectionName: "Public",
+      // The rest of the pipeline reads `connectionId`, not `id`. Leaving it unset
+      // meant every ACP agent — cursor-acp, opencode-acp, omp-acp, codex-acp,
+      // devin-cli, all of them noAuth — reached the usage tracker with no
+      // connection at all: `trackPendingRequest` keys its per-account map by it
+      // and therefore recorded nothing, so the topology never showed an agent as
+      // busy and usage rows landed with a null connectionId.
+      //
+      // Two branches below already compare against this exact value, so they were
+      // written expecting it to be here.
+      connectionId: NOAUTH_CONNECTION_ID,
+      connectionName: "Public",
         isActive: true,
         accessToken: "public",
         providerSpecificData: {

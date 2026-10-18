@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
+import { NOAUTH_CONNECTION_ID, NOAUTH_ACCOUNT_NAME } from "@/shared/constants/noauth.js";
 import { classifyByProviderList, classifyModelTier, rollUpTiers } from "@/lib/quotaTiers";
 import { getMeta, setMeta } from "../helpers/metaStore.js";
 
@@ -231,7 +232,12 @@ export async function getActiveRequests() {
   for (const [connectionId, models] of Object.entries(pendingRequests.byAccount)) {
     for (const [modelKey, count] of Object.entries(models)) {
       if (count > 0) {
-        const accountName = connectionMap[connectionId] || `Account ${connectionId.slice(0, 8)}...`;
+        // "noauth" is a synthetic id, not a truncated uuid. Showing it as
+        // "Account noauth..." reads like a bug in the dashboard rather than as
+        // what it is: an agent running on the operator's own machine.
+        const accountName = connectionId === NOAUTH_CONNECTION_ID
+          ? NOAUTH_ACCOUNT_NAME
+          : (connectionMap[connectionId] || `Account ${connectionId.slice(0, 8)}...`);
         const match = modelKey.match(/^(.*) \((.*)\)$/);
         activeRequests.push({
           model: match ? match[1] : modelKey,

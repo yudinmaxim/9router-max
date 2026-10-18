@@ -32,7 +32,7 @@ function getProviderImageUrl(providerId) {
 
 // Custom provider node - rectangle with image + name
 function ProviderNode({ data }) {
-  const { label, color, imageUrl, textIcon, active } = data;
+  const { label, color, imageUrl, textIcon, active, last, error } = data;
   const [imgError, setImgError] = useState(false);
   return (
     <div
@@ -74,10 +74,32 @@ function ProviderNode({ data }) {
       {/* Provider name */}
       <span
         className="text-base font-medium truncate"
-        style={{ color: active ? color : "var(--color-text)" }}
+        style={{ color: active || last ? color : "var(--color-text)" }}
       >
         {label}
       </span>
+
+      {/* Last-used marker: the edge was already tinted, but an edge is easy to
+          lose on a busy canvas. This answers "through whom did the last request
+          go" without having to trace a line. */}
+      {!active && last && (
+        <span
+          className="shrink-0 rounded-full px-1.5 text-[10px] font-semibold"
+          style={{ backgroundColor: `${color}22`, color }}
+          title="Last request went through this provider"
+        >
+          last
+        </span>
+      )}
+      {!active && !last && error && (
+        <span
+          className="shrink-0 rounded-full px-1.5 text-[10px] font-semibold"
+          style={{ backgroundColor: "rgba(239,68,68,0.15)", color: "#ef4444" }}
+          title="Last request through this provider failed"
+        >
+          error
+        </span>
+      )}
 
       {/* Active indicator */}
       {active && (
@@ -260,7 +282,7 @@ const nodeTypes = { provider: ProviderNode, router: RouterNode };
 const edgeTypes = { topology: TopologyEdge };
 
 // Place N nodes evenly along an ellipse around the router center.
-function buildLayout(providers, activeSet, lastSet, errorSet) {
+function buildLayout(providers, activeSet, lastSet, errorSet, activeRequests = []) {
   const nodeW = 180;
   const nodeH = 30;
   const routerW = 120;
@@ -309,7 +331,17 @@ function buildLayout(providers, activeSet, lastSet, errorSet) {
       color: config.color || "#6b7280",
       imageUrl: getProviderImageUrl(p.provider),
       textIcon: config.textIcon || (p.provider || "?").slice(0, 2).toUpperCase(),
+      // `active` alone left the node itself indistinguishable from an unused one:
+      // a provider that had just served a request only got a thin amber edge,
+      // which is easy to miss. The node now carries all three states, so
+      // "which provider did the agent just go through" is answerable from the
+      // picture alone.
       active,
+      last,
+      error,
+      modelCount: activeSet.has(p.provider?.toLowerCase())
+        ? (activeRequests || []).filter((r) => r.provider?.toLowerCase() === p.provider.toLowerCase()).length
+        : 0,
     };
 
     // Distribute evenly starting from top (−π/2), clockwise
@@ -399,8 +431,8 @@ export default function ProviderTopology({ providers = [], activeRequests = [], 
   }, [rawActiveSet, tick]);
 
   const { nodes, edges } = useMemo(
-    () => buildLayout(providers, activeSet, lastSet, errorSet),
-    [providers, activeSet, lastSet, errorSet]
+    () => buildLayout(providers, activeSet, lastSet, errorSet, activeRequests),
+    [providers, activeSet, lastSet, errorSet, activeRequests]
   );
 
   // Stable key — only remount when provider list changes
