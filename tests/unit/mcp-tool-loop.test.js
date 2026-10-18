@@ -7,6 +7,8 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  addUsage,
+  patchUsageInBody,
   messageFromDeltas,
   pickOwnedToolCalls,
   parseToolArguments,
@@ -118,5 +120,52 @@ describe("folding results back into the history", () => {
     const messages = appendToolResults([], { role: "assistant" }, calls, [{ text: "ok" }, undefined]);
     expect(messages).toHaveLength(3);
     expect(messages[2].content).toBe("(no result)");
+  });
+});
+describe("accounting for rounds the client never sees", () => {
+  // The loop makes one upstream call per round, the client asked for one answer,
+  // and only the last round survives to become a statistics row. A live check
+  // found three of four calls missing from the usage table; these are the sums
+  // that stop that.
+  it("reads usage out of a JSON body and a trailing SSE frame", async () => {
+    const json = await readResponseMessage(new Response(JSON.stringify({
+      choices: [{ message: { role: "assistant" } }],
+      usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+    }), { headers: { "content-type": "application/json" } }));
+    expect(json.usage).toEqual({ prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 });
+
+    const sse = await readResponseMessage(new Response([
+      "data: {\"choices\":[{\"delta\":{}}]}",
+      "data: {\"choices\":[{\"delta\":{}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}",
+      "data: [DONE]",
+    ].join("\n\n"), { headers: { "content-type": "text/event-stream" } }));
+    expect(sse.usage).toEqual({ prompt_tokens: 7, completion_tokens: 3 });
+  });
+
+  it("adds rounds together", () => {
+    const total = [1, 2, 3].reduce((acc, n) => addUsage(acc, { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 }), null);
+    expect(total).toEqual({ prompt_tokens: 300, completion_tokens: 150, total_tokens: 450 });
+  });
+
+  it("ignores a field a round does not carry instead of zeroing it", () => {
+    const total = addUsage({ prompt_tokens: 100 }, { prompt_tokens: 50, cached_tokens: 8 });
+    expect(total).toEqual({ prompt_tokens: 150, cached_tokens: 8 });
+  });
+
+  it("adds the discarded rounds into the body the client gets", () => {
+    const body = JSON.stringify({
+      choices: [{ message: { role: "assistant", content: "done" } }],
+      usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+    });
+    const patched = JSON.parse(patchUsageInBody(body, { prompt_tokens: 300, completion_tokens: 150, total_tokens: 450 }));
+    // Four rounds at 100/50 each.
+    expect(patched.usage).toEqual({ prompt_tokens: 400, completion_tokens: 200, total_tokens: 600 });
+    expect(patched.choices[0].message.content).toBe("done");
+  });
+
+  it("leaves a body it cannot account for alone rather than rewriting it blind", () => {
+    expect(patchUsageInBody("not json", { prompt_tokens: 5 })).toBe("not json");
+    expect(patchUsageInBody("[1,2]", { prompt_tokens: 5 })).toBe("[1,2]");
+    expect(patchUsageInBody("{}", null)).toBe("{}");
   });
 });

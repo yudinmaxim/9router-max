@@ -85,9 +85,10 @@ export function appendToolResults(messages, assistantMessage, calls, results) {
 export async function readResponseMessage(response) {
   const contentType = response.headers.get("content-type") || "";
   const text = await response.text();
-  if (!text) return { message: null, text, wasSse: false };
+  if (!text) return { message: null, usage: null, text, wasSse: false };
   if (contentType.includes("text/event-stream")) {
     const deltas = [];
+    let usage = null;
     for (const line of text.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed.startsWith("data:")) continue;
@@ -95,18 +96,61 @@ export async function readResponseMessage(response) {
       if (!payload || payload === "[DONE]") continue;
       let frame;
       try { frame = JSON.parse(payload); } catch { continue; }
+      // Streamable responses carry usage on a trailing frame, often the very
+      // last one before [DONE], so keep overwriting rather than first-wins.
+      if (frame?.usage) usage = frame.usage;
       const choice = frame?.choices?.[0];
       if (choice?.delta) deltas.push(choice.delta);
       else if (choice?.message) deltas.push(choice.message);
     }
-    return { message: messageFromDeltas(deltas), text, wasSse: true };
+    return { message: messageFromDeltas(deltas), usage, text, wasSse: true };
   }
   try {
     const parsed = JSON.parse(text);
-    return { message: parsed?.choices?.[0]?.message ?? null, text, wasSse: false };
+    return {
+      message: parsed?.choices?.[0]?.message ?? null,
+      usage: parsed?.usage ?? null,
+      text,
+      wasSse: false,
+    };
   } catch {
-    return { message: null, text, wasSse: false };
+    return { message: null, usage: null, text, wasSse: false };
   }
+}
+
+const USAGE_FIELDS = ["prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "cache_creation_input_tokens", "reasoning_tokens"];
+
+/** Add one round's usage to a running total, ignoring fields it does not carry. */
+export function addUsage(total, usage) {
+  if (!usage || typeof usage !== "object") return total;
+  const out = total || {};
+  for (const field of USAGE_FIELDS) {
+    const value = usage[field];
+    if (Number.isFinite(value)) out[field] = (out[field] || 0) + value;
+  }
+  return Object.keys(out).length > 0 ? out : total;
+}
+
+/**
+ * Fold the usage of rounds that were discarded back into the body the client
+ * will be handed.
+ *
+ * The loop makes one upstream call per round but the client asked for one
+ * answer, so only the last round's response survives to be turned into a
+ * statistics row. Without this, the router's own spend is under-reported by
+ * exactly the rounds nobody sees: three of four calls vanished from the usage
+ * table in a live check, and nothing on the page hinted at it.
+ *
+ * Returns the text unchanged when it is not JSON or carries no usage — a body
+ * the loop cannot account for is better left alone than rewritten blind.
+ */
+export function patchUsageInBody(text, extra) {
+  if (!extra || typeof text !== "string" || !text) return text;
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { return text; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return text;
+  parsed.usage = addUsage(extra, parsed.usage);
+  return JSON.stringify(parsed);
 }
 
 /**

@@ -21,7 +21,7 @@ import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/streamingHandler.js";
 import { detectClientTool, isNativePassthrough } from "../utils/clientDetector.js";
 import { dedupeTools } from "../utils/toolDeduper.js";
-import { readResponseMessage, rebuildResponse, pickOwnedToolCalls, parseToolArguments, appendToolResults } from "../utils/mcpToolLoop.js";
+import { readResponseMessage, rebuildResponse, pickOwnedToolCalls, parseToolArguments, appendToolResults, addUsage, patchUsageInBody } from "../utils/mcpToolLoop.js";
 import { injectCaveman } from "../rtk/caveman.js";
 import { injectPonytail } from "../rtk/ponytail.js";
 import { compressMessages } from "../rtk/index.js";
@@ -544,13 +544,23 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // the response exactly as the provider sent it.
   if (ownedMcpNames.size > 0) {
     const cap = MCP_TOOL_LOOP_MAX;
+    // Usage of the rounds this loop throws away. The client asked for one answer,
+    // so only the last round reaches the response handler and only that one
+    // becomes a statistics row — without this the router under-reports its own
+    // spend by every round the client never sees.
+    let discardedUsage = null;
     for (let round = 0; round < cap; round += 1) {
       const read = await readResponseMessage(providerResponse);
       // The body has been consumed either way, so the response handed on has to
       // be rebuilt — including when there is nothing to do.
       providerResponse = rebuildResponse(providerResponse, read.text, read.wasSse);
       const calls = pickOwnedToolCalls(read.message, (name) => ownedMcpNames.has(name));
-      if (calls.length === 0) break;
+      if (calls.length === 0) {
+        // This round survives, so its own usage must not be counted twice.
+        if (discardedUsage) providerResponse = rebuildResponse(providerResponse, patchUsageInBody(read.text, discardedUsage), read.wasSse);
+        break;
+      }
+      discardedUsage = addUsage(discardedUsage, read.usage);
 
       const results = [];
       for (const call of calls) {
