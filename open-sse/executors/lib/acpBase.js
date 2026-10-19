@@ -60,7 +60,9 @@ import os from "node:os";
 import fs from "node:fs";
 import { BaseExecutor } from "../base.js";
 import { ensureAcpAdapter } from "./acpAdapter.js";
-import { rpc, resolveWorkspaceCwd, buildPromptText, extractMessages, estimateTokens, agentSpawnCommand } from "./acpCommon.js";
+import { createAcpTransport } from "./acpTransport.js";
+import { acpSessionKey, acquireAcpSession, peekAcpSession, putAcpSession, markAcpSessionDead } from "./acpSessionPool.js";
+import { resolveWorkspaceCwd, buildPromptText, extractMessages, estimateTokens, agentSpawnCommand } from "./acpCommon.js";
 import {
   classifyAction,
   rememberToolKind,
@@ -502,7 +504,7 @@ export class AcpAgentExecutor extends BaseExecutor {
     log?.info?.(tag, `${exe} ${args.join(" ")} → model=${model}, bin=${bin}, cwd=${workspaceCwd}`);
 
     const sseStream = new ReadableStream({
-      start(controller) {
+      async start(controller) {
         const enc = new TextEncoder();
         // `close` can race `error` (both fire when the binary is missing), and
         // the agent may emit trailing notifications after we stop the turn — so
@@ -528,13 +530,27 @@ export class AcpAgentExecutor extends BaseExecutor {
         // its own entries (CODEX_PATH and friends); those still merge over the
         // inherited set rather than replacing it. Resolved out here because the
         // `start()` callback below runs with the stream as `this`.
+        const sessionKey = acpSessionKey({ provider: this.providerId, connection: bin, cwd: workspaceCwd, model });
+        let pooled = null;
+        let releaseSession = null;
+        let child;
+        let transport;
         const { cmd, args: spawnArgs, shell } = agentSpawnCommand(bin, args);
-        const child = spawn(cmd, spawnArgs, {
-          env,
-          cwd: workspaceCwd,
-          stdio: ["pipe", "pipe", "pipe"],
-          shell,
-        });
+        const existing = peekAcpSession(sessionKey);
+        if (existing && !existing.dead && existing.sessionId) {
+          const acquired = await acquireAcpSession(sessionKey);
+          pooled = acquired.entry;
+          releaseSession = acquired.release;
+          child = pooled.child;
+          transport = pooled.transport;
+        } else {
+          child = spawn(cmd, spawnArgs, {
+            env,
+            cwd: workspaceCwd,
+            stdio: ["pipe", "pipe", "pipe"],
+            shell,
+          });
+        }
 
         let spawnError = null;
         let stdinClosed = false;
@@ -550,8 +566,12 @@ export class AcpAgentExecutor extends BaseExecutor {
         let initDone = false;
         let sessionCreated = false;
         let promptSent = false;
-        let sessionId = null;
-        let catalog = [];
+        let sessionId = pooled?.sessionId || null;
+        let catalog = pooled?.catalog || [];
+        if (pooled?.sessionId) {
+          initDone = true;
+          sessionCreated = true;
+        }
         let resolvedModelId = null;
         // Config options still to pin on this session, applied one RPC at a
         // time before the prompt. The agent blocks on each, so they cannot be
@@ -564,28 +584,14 @@ export class AcpAgentExecutor extends BaseExecutor {
         let totalText = "";
         let finished = false;
 
-        const sendRpc = (method, params) => {
-          if (stdinClosed || child.stdin.destroyed) return;
-          const id = idCounter++;
-          try {
-            child.stdin.write(rpc(method, params, id));
-          } catch {
-            /* ignore write errors after close */
-          }
-          return id;
-        };
+        if (!transport) transport = createAcpTransport(child);
+        const sendRpc = (method, params) => transport.send(method, params, idCounter++);
+        let removeMessageListener = null;
 
         // Answer an agent-initiated request under the id the agent chose.
         // Must not touch idCounter — that counter tracks requests we made, and
         // reusing its values would collide with their in-flight responses.
-        const sendRpcRaw = (obj) => {
-          if (stdinClosed || child.stdin.destroyed) return;
-          try {
-            child.stdin.write(JSON.stringify(obj) + "\n");
-          } catch {
-            /* ignore write errors after close */
-          }
-        };
+        const sendRpcRaw = (obj) => transport.sendRaw(obj);
 
         const chunk = (delta, finishReason = null, extra = {}) => {
           emit(
@@ -654,7 +660,6 @@ export class AcpAgentExecutor extends BaseExecutor {
         const finish = (error, finishReason = "stop", errorCode) => {
           if (finished) return;
           finished = true;
-
           if (error) {
             emit(
               `data: ${JSON.stringify({
@@ -678,6 +683,20 @@ export class AcpAgentExecutor extends BaseExecutor {
           }
           emit("data: [DONE]\n\n");
 
+          removeMessageListener?.();
+          removeMessageListener = null;
+          if (releaseSession) {
+            releaseSession();
+            releaseSession = null;
+            if (sinkPoll) {
+              clearInterval(sinkPoll);
+              sinkPoll = null;
+            }
+            cleanupToolCallSink(clientToolSink);
+            clientToolSink = null;
+            closeStream();
+            return;
+          }
           try {
             if (!stdinClosed) {
               stdinClosed = true;
@@ -756,23 +775,7 @@ export class AcpAgentExecutor extends BaseExecutor {
         };
 
         // ── stdout reader (NDJSON) ──────────────────────────────────────────
-        let buffer = "";
-
-        child.stdout.on("data", (chunkData) => {
-          buffer += chunkData.toString("utf8");
-          let nl;
-          // Each ACP message is a newline-terminated JSON line.
-          while ((nl = buffer.indexOf("\n")) !== -1) {
-            const line = buffer.slice(0, nl).trim();
-            buffer = buffer.slice(nl + 1);
-            if (!line) continue;
-
-            let msg;
-            try {
-              msg = JSON.parse(line);
-            } catch {
-              continue; // ignore non-JSON lines (banner text, etc.)
-            }
+        removeMessageListener = transport.onMessage((msg) => {
 
             // ── initialize response → open a session ──────────────────────
             if (!initDone && msg.result !== undefined && !msg.method) {
@@ -804,6 +807,7 @@ export class AcpAgentExecutor extends BaseExecutor {
               }
               sessionCreated = true;
               catalog = collectModelCatalog(res);
+              putAcpSession(sessionKey, { child, transport, sessionId, catalog });
               const current = currentAgentModel(res);
               resolvedModelId = resolveAgentModelId(model, catalog, current);
               log?.debug?.(tag, `session=${sessionId} current=${current} requested=${model} → ${resolvedModelId}`);
@@ -1008,7 +1012,6 @@ export class AcpAgentExecutor extends BaseExecutor {
               finish(`${label} ACP error ${msg.error.code}: ${msg.error.message}${detail}`);
               return;
             }
-          }
         });
 
         child.stderr.on("data", (chunkData) => {
@@ -1016,6 +1019,7 @@ export class AcpAgentExecutor extends BaseExecutor {
         });
 
         child.on("close", (code) => {
+          if (pooled) markAcpSessionDead(sessionKey);
           if (finished) return;
           if (code !== 0 && !spawnError && !roleEmitted) {
             finish(`${label} CLI exited with code ${code}`);
@@ -1026,11 +1030,26 @@ export class AcpAgentExecutor extends BaseExecutor {
         });
 
         // ── handshake ───────────────────────────────────────────────────────
-        sendRpc("initialize", {
-          protocolVersion: 1,
-          clientInfo: { name: "9router", version: this.config?.version || "1.0" },
-          capabilities: {},
-        });
+        if (pooled?.sessionId) {
+          const current = currentAgentModel({ configOptions: catalog });
+          resolvedModelId = resolveAgentModelId(model, catalog, current);
+          for (const [configId, value] of Object.entries(sessionDefaults)) {
+            if (configId !== "model" && typeof value === "string" && value) {
+              pendingConfigSets.push({ configId, value });
+            }
+          }
+          if (resolvedModelId && resolvedModelId !== current) {
+            pendingConfigSets.push({ configId: "model", value: resolvedModelId });
+          }
+          if (pendingConfigSets.length) sendNextConfigOption();
+          else startPrompt();
+        } else {
+          sendRpc("initialize", {
+            protocolVersion: 1,
+            clientInfo: { name: "9router", version: this.config?.version || "1.0" },
+            capabilities: {},
+          });
+        }
       },
     });
 
