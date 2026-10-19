@@ -70,7 +70,7 @@ import {
   parsePolicyInput,
   chooseOption,
 } from "./acpPermissions.js";
-import { ACP_PERMISSION_HEADER, ACP_PERMISSION_BODY_KEY } from "../../config/runtimeConfig.js";
+import { ACP_PERMISSION_HEADER, ACP_PERMISSION_BODY_KEY, ACP_DEFAULTS_HEADER, ACP_DEFAULTS_BODY_KEY } from "../../config/runtimeConfig.js";
 import {
   CLIENT_TOOLS_SERVER_NAME,
   buildClientToolsMcp,
@@ -416,7 +416,7 @@ export class AcpAgentExecutor extends BaseExecutor {
     return false;
   }
 
-  async execute({ model, body, credentials, acpPermissions, mcpProxyTargets, signal, log }) {
+  async execute({ model, body, credentials, acpPermissions, acpSessionDefaults, mcpProxyTargets, signal, log }) {
     const { exe, envVar, args, tag, label, installHint, errorType, versionsDir, extraDirs } = this.acp;
     const b = body ?? {};
     const messages = extractMessages(b);
@@ -448,6 +448,18 @@ export class AcpAgentExecutor extends BaseExecutor {
       parsePolicyInput(bodyValue),
       parsePolicyInput(Array.isArray(headerValue) ? headerValue[0] : headerValue)
     );
+
+    // Options the operator pinned on the provider page. The request may override
+    // them for one call, the same layering ACP permissions use — a per-request
+    // header beats the dashboard without persisting anything.
+    const requestDefaults = (() => {
+      const headerValue2 = credentials?.rawHeaders?.[ACP_DEFAULTS_HEADER];
+      const bodyValue2 = b?.metadata?.[ACP_DEFAULTS_BODY_KEY];
+      return parsePolicyInput(bodyValue2) || parsePolicyInput(
+        Array.isArray(headerValue2) ? headerValue2[0] : headerValue2
+      );
+    })();
+    const sessionDefaults = { ...(acpSessionDefaults || {}), ...(requestDefaults || {}) };
     // `toolCallId → kind`, filled from session/update as the agent narrates its
     // own tools. The permission request reports `kind: "other"` for everything,
     // so this map is the only truthful source of what the action is.
@@ -541,6 +553,10 @@ export class AcpAgentExecutor extends BaseExecutor {
         let sessionId = null;
         let catalog = [];
         let resolvedModelId = null;
+        // Config options still to pin on this session, applied one RPC at a
+        // time before the prompt. The agent blocks on each, so they cannot be
+        // fired in parallel.
+        const pendingConfigSets = [];
 
         const responseId = `chatcmpl-acp-${Date.now()}`;
         const created = Math.floor(Date.now() / 1000);
@@ -721,6 +737,24 @@ export class AcpAgentExecutor extends BaseExecutor {
           });
         };
 
+        /**
+         * Send the next queued `session/set_config_option`, if any.
+         *
+         * These are the operator's dashboard choices (access mode, collaboration
+         * mode, reasoning level) plus the model this request resolved to. A
+         * failed option must not cost the turn: the agent's own default stands
+         * and the prompt still goes out.
+         */
+        const sendNextConfigOption = () => {
+          const next = pendingConfigSets.shift();
+          if (!next) return;
+          sendRpc("session/set_config_option", {
+            sessionId,
+            configId: next.configId,
+            value: next.value,
+          });
+        };
+
         // ── stdout reader (NDJSON) ──────────────────────────────────────────
         let buffer = "";
 
@@ -796,21 +830,31 @@ export class AcpAgentExecutor extends BaseExecutor {
                 return;
               }
 
-              if (resolvedModelId && resolvedModelId !== current) {
-                sendRpc("session/set_config_option", {
-                  sessionId,
-                  configId: "model",
-                  value: resolvedModelId,
-                });
-              } else {
-                startPrompt();
+              // Operator's dashboard choices first, so the model this request asked for
+              // wins over whatever the agent had selected. `model` is excluded:
+              // it is decided below, from this request.
+              for (const [configId, value] of Object.entries(sessionDefaults)) {
+                if (configId === "model" || typeof value !== "string" || !value) continue;
+                pendingConfigSets.push({ configId, value });
               }
+
+              if (resolvedModelId && resolvedModelId !== current) {
+                pendingConfigSets.push({ configId: "model", value: resolvedModelId });
+              }
+              // Nothing to pin — the agent's own defaults stand and the turn
+              // goes out immediately.
+              if (pendingConfigSets.length) sendNextConfigOption();
+              else startPrompt();
               continue;
             }
 
-            // ── session/set_config_option response → send the prompt ───────
+            // ── session/set_config_option response → next option, then prompt ─
             if (sessionCreated && !promptSent && msg.result !== undefined && !msg.method) {
-              startPrompt();
+              if (pendingConfigSets.length) {
+                sendNextConfigOption();
+              } else {
+                startPrompt();
+              }
               continue;
             }
 

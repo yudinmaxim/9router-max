@@ -325,6 +325,11 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         chatSettings.acpPermissions,
         (chatSettings.acpPermissionsByProvider || {})[provider]
       ),
+      // Options the operator pinned for this agent on its provider page
+      // (access mode, collaboration mode, reasoning level). Pinned on every new
+      // ACP session, so a turn arrives at the agent already configured the way
+      // the dashboard says it is.
+      acpSessionDefaults: (chatSettings.acpAgents?.[provider]?.defaults) || null,
       // MCP servers from the router-side registry, as ACP mcpServers entries
       // pointing at our own proxy. Empty array unless the operator registered
       // some, and ignored by non-ACP executors. The engine never reads the

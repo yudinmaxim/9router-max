@@ -48,6 +48,14 @@ function adapterDir(providerId) {
   return def ? path.join(AGENTS_DIR, def.slug) : null;
 }
 
+/**
+ * Per-agent data dir: holds both the adapter install and the catalog cache that
+ * discovery reads, so the two live together.
+ */
+export function acpAgentDir(providerId) {
+  return adapterDir(providerId);
+}
+
 function installedBin(providerId) {
   const def = adapterDef(providerId);
   const dir = adapterDir(providerId);

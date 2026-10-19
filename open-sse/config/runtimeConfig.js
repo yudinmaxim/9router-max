@@ -103,6 +103,12 @@ export const ACP_PERMISSION_HEADER = "x-9router-acp-permissions";
 // Body-level equivalent of the header, for clients that cannot set headers.
 export const ACP_PERMISSION_BODY_KEY = "acp_permissions";
 
+// Per-request override for the agent options pinned on the provider page
+// ({"mode":"read-only"}). Same layering as ACP permissions: request beats
+// dashboard, and neither is persisted.
+export const ACP_DEFAULTS_HEADER = "x-9router-acp-defaults";
+export const ACP_DEFAULTS_BODY_KEY = "acp_defaults";
+
 // Permissive by default: the agent is a local process running as the user and
 // would act regardless of what we answer, so refusing only removes capability
 // the user asked for by driving an agent. Tighten per action in the dashboard.

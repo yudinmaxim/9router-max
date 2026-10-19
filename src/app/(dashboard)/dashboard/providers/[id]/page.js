@@ -25,6 +25,7 @@ import BulkImportCodexModal from "./BulkImportCodexModal";
 import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
 import CustomConfigCard from "./CustomConfigCard";
 import AcpPermissionsCard from "./AcpPermissionsCard";
+import AcpAgentCard from "./AcpAgentCard";
 
 const ONE_BY_ONE_DELAY_MS = 1000;
 
@@ -1754,6 +1755,11 @@ export default function ProviderDetailPage() {
       {/* Tool permissions for CLI agents driven over ACP. Only these providers
           spawn a local agent that can act on the machine, so only they ask. */}
       {isAcpProvider && <AcpPermissionsCard providerId={providerId} />}
+
+      {/* Agent setup: which of the agent's own models to publish, and the
+          options pinned on every session. Replaces the "nothing to configure"
+          dead end a noAuth provider used to end at. */}
+      {isAcpProvider && <AcpAgentCard providerId={providerId} />}
 
       {/* Models */}
       <Card>

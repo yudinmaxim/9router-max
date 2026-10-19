@@ -20,6 +20,7 @@ import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
+import { getAllAcpAgentSettings } from "@/lib/acpAgents";
 
 // Qoder shares one live resolver across intl (qoder) and CN (qoder-cn); the
 // credentials carry the provider id so qoderModels picks the right region's
@@ -352,6 +353,19 @@ export async function buildModelsList(kindFilter, options = {}) {
   }
   const isDisabled = (alias, modelId) => Array.isArray(disabledByAlias[alias]) && disabledByAlias[alias].includes(modelId);
 
+  // ACP agents publish whatever subset of their own catalog the user picked on
+  // the provider page. Only agents with an explicit choice are consulted; the
+  // rest keep serving their static registry list untouched.
+  const acpEnabledModels = {};
+  try {
+    const acpSettings = await getAllAcpAgentSettings();
+    for (const [providerId, entry] of Object.entries(acpSettings)) {
+      if (Array.isArray(entry?.enabledModels)) acpEnabledModels[providerId] = entry.enabledModels;
+    }
+  } catch (e) {
+    console.log("Could not read ACP agent settings:", e?.message || e);
+  }
+
   const activeConnectionByProvider = new Map();
   for (const conn of connections) {
     if (!activeConnectionByProvider.has(conn.provider)) {
@@ -377,7 +391,12 @@ export async function buildModelsList(kindFilter, options = {}) {
       connectionName: "Public",
       isActive: true,
       accessToken: "public",
-      providerSpecificData: {},
+      // The agent's own catalog, narrowed to what the user chose to publish.
+      // Absent choices leave this empty, and the static registry list stands —
+      // discovery must not quietly empty a provider that worked before.
+      providerSpecificData: acpEnabledModels[providerId]
+        ? { enabledModels: acpEnabledModels[providerId] }
+        : {},
     });
   }
 
