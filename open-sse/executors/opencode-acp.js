@@ -23,10 +23,7 @@ export class OpenCodeAcpExecutor extends AcpAgentExecutor {
     super(PROVIDER_ID, {
       exe: "opencode",
       envVar: "CLI_OPENCODE_BIN",
-      extraDirs: [
-        path.join(os.homedir(), ".local", "bin"),
-        path.join(os.homedir(), ".nvm", "versions", "node", "v24.18.0", "bin"),
-      ],
+      extraDirs: [path.join(os.homedir(), ".local", "bin")],
       label: "OpenCode",
       errorType: "opencode_acp_error",
       installHint: "Install with `npm i -g opencode` and run `opencode auth login`",

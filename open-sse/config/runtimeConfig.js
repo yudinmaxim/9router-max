@@ -112,6 +112,34 @@ export const DEFAULT_ACP_PERMISSIONS = Object.freeze(
   )
 );
 
+// ACP agents that ship no `acp` subcommand of their own and therefore need a
+// bridge process on stdio. Codex is the case that matters today: the CLI has
+// app-server but no ACP, so `codex acp` is parsed as a prompt for the
+// interactive TUI and exits with "stdin is not a terminal".
+//
+// `package` is installed on demand into <DATA_DIR>/acp-agents/<slug> and spawned
+// from there, so the user never installs anything by hand. `envVar` overrides
+// the resolved binary, matching the CLI_*_BIN convention used for agent CLIs.
+export const ACP_ADAPTERS = {
+  "codex-acp": {
+    slug: "codex",
+    package: "@agentclientprotocol/codex-acp",
+    bin: "codex-acp",
+    envVar: "CLI_CODEX_ACP_BIN",
+    // The adapter drives this binary; without it the adapter falls back to its
+    // own bundled codex, which may lag behind the user's installed CLI.
+    codexEnvVar: "CLI_CODEX_BIN",
+  },
+};
+
+// npm install of an adapter is small but not instant; keep it out of the request
+// path's failure window (see acpAdapter.js, which installs on first use).
+export const ACP_ADAPTER_INSTALL_TIMEOUT_MS = 180000;
+
+// After a failed install, don't retry on every request — an offline machine
+// would otherwise pay the timeout on each one.
+export const ACP_ADAPTER_RETRY_COOLDOWN_MS = 600000;
+
 // Retry config for 429 responses (legacy - kept for backward compatibility)
 export const RETRY_CONFIG = {
   maxAttempts: 2,

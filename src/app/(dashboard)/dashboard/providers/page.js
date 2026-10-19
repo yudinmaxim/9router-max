@@ -24,6 +24,7 @@ import { getErrorCode, getRelativeTime } from "@/shared/utils";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useHeaderSearchStore } from "@/store/headerSearchStore";
 import ModelAvailabilityBadge from "./components/ModelAvailabilityBadge";
+import AcpStatusBadge from "./components/AcpStatusBadge";
 import AddCompatibleModal from "./components/AddCompatibleModal";
 import { STATUS_FILTER_OPTIONS, matchesStatusFilter } from "./utils";
 
@@ -696,6 +697,10 @@ export default function ProvidersPage() {
 function ProviderCard({ providerId, provider, stats, authType, onToggle }) {
   const { connected, error, errorCode, errorTime, allDisabled } = stats;
   const isNoAuth = !!provider.noAuth;
+  // ACP agents run a local CLI rather than holding a credential, so they have
+  // no connection row to read a status from. Their badge is measured by an
+  // actual probe instead of assumed ready (see components/AcpStatusBadge).
+  const isAcpProvider = provider.id.endsWith("-acp");
 
   const dotColors = {
     free: "bg-green-500",
@@ -747,6 +752,8 @@ function ProviderCard({ providerId, provider, stats, authType, onToggle }) {
                       Disabled
                     </span>
                   </Badge>
+                ) : isAcpProvider ? (
+                  <AcpStatusBadge providerId={provider.id} />
                 ) : isNoAuth ? (
                   <Badge variant="success" size="sm" dot>Ready</Badge>
                 ) : (

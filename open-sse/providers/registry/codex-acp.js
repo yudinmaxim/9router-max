@@ -5,14 +5,16 @@
  * NoAuth: the CLI holds its own credentials (`codex login`) and the executor spawns
  * it with the inherited environment.
  *
- * ## No models are listed
+ * ## Model ids
  *
- * Unlike cursor, opencode and omp, this has not been verified against a real `codex`
- * binary — the CLI was not installed on the machine where this executor was written.
- * Rather than copy a guessed catalog, the provider ships empty and relies on
- * `passthroughModels`: the executor resolves the client's id against the catalog
- * returned by `session/new` at call time, so any model codex offers works without a
- * registry edit here. Add a static list once the CLI has been run locally.
+ * Only `default` is listed. Codex advertises its catalog through the adapter's
+ * ACP `session/new`, and the executor matches whatever the client asks for
+ * against it (falling back to `default` when it cannot place the request), so a
+ * guessed static list would be wrong twice over: stale on the next Codex
+ * release, and invisible to clients that only read `/v1/models`. Shipping an
+ * empty `models` was the worst of both — the provider existed but was
+ * discoverable only by guessing its id, which is how the `oc/*` ids in the
+ * opencode config went stale in the first place.
  *
  * Trade-off: codex runs its own shell/fs tools and reports them over ACP, so
  * client-supplied `tools` are not callable through this provider. One request = one
@@ -32,7 +34,7 @@ export default {
     website: "https://openai.com/codex",
     notice: {
       signupUrl: "https://openai.com/codex/cli/",
-      text: "Install the `codex` CLI and run `codex login`. 9router then drives it over ACP; override the binary path with CLI_CODEX_BIN. The model list is discovered at call time from the CLI itself.",
+      text: "Install the `codex` CLI and run `codex login`. Codex has no `acp` subcommand, so 9router drives it through an ACP adapter it installs on first use; override the binary with CLI_CODEX_ACP_BIN. The model list is discovered at call time from the CLI itself.",
     },
   },
   category: "free",
@@ -47,6 +49,6 @@ export default {
     forceStream: true,
     noAuth: true,
   },
-  models: [],
+  models: [{ id: "default", name: "Auto (Codex Picks)" }],
   passthroughModels: true,
 };

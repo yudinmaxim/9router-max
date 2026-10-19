@@ -59,6 +59,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { BaseExecutor } from "../base.js";
+import { ensureAcpAdapter } from "./acpAdapter.js";
 import { rpc, resolveWorkspaceCwd, buildPromptText, extractMessages, estimateTokens, agentSpawnCommand } from "./acpCommon.js";
 import {
   classifyAction,
@@ -149,6 +150,30 @@ export function resolveAgentBin({ envVar, exe, versionsDir, extraDirs = [] }) {
       return path.join(entry, bin);
     })
   );
+
+  // nvm keeps one dir per installed Node version, and only the current one has
+  // the agent's global bin on PATH. Scanning (newest first) beats naming a
+  // single version, which silently misses as soon as the user upgrades Node.
+  const nvmVersions = path.join(home, ".nvm", "versions", "node");
+  try {
+    for (const version of fs
+      .readdirSync(nvmVersions)
+      .filter((v) => fs.existsSync(path.join(nvmVersions, v, bin)))
+      .sort()
+      .reverse()) {
+      candidates.push(path.join(nvmVersions, version, bin));
+    }
+  } catch {
+    /* no nvm install */
+  }
+
+  // PATH before the system directories: it is what the user actually runs from
+  // their shell, whereas /usr/bin holds whatever a distro package installed
+  // months ago and never updated.
+  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
+    if (dir) candidates.push(path.join(dir, bin));
+  }
+
   candidates.push(
     "/opt/homebrew/bin/" + bin,
     "/usr/local/bin/" + bin,
@@ -350,6 +375,10 @@ export class AcpAgentExecutor extends BaseExecutor {
    * @param {string} [spec.args]     args after the binary (default `["acp"]`)
    * @param {string} [spec.tag]      log tag (default: the provider id, uppercased)
    * @param {string} [spec.label]    human-readable agent name for error messages
+   * @param {string} [spec.adapter]  ACP_ADAPTERS key — the CLI has no `acp`
+   *   subcommand, so this bridge package is resolved and installed instead
+   * @param {object|(() => object)} [spec.env]  extra env for the child process,
+   *   merged over the inherited one (a function is called per request)
    * @param {string} spec.installHint  how to install, shown when the binary is missing
    * @param {string} [spec.versionsDir]
    * @param {string[]} [spec.extraDirs]
@@ -393,7 +422,20 @@ export class AcpAgentExecutor extends BaseExecutor {
     const messages = extractMessages(b);
     const promptText = buildPromptText(messages);
     const workspaceCwd = resolveWorkspaceCwd(b);
-    const bin = resolveAgentBin({ envVar, exe, versionsDir, extraDirs });
+    // Resolved here rather than inside the stream's start(), which runs with the
+    // stream as `this`.
+    // Inherit the parent environment: the CLI reads its stored auth and its
+    // default model from its own config files. Nothing is injected — a bogus
+    // key here would override the agent's own credentials. A spec may add
+    // its own entries (CODEX_PATH and friends); those still merge over the
+    // inherited set rather than replacing it.
+    const env = { ...process.env, ...(this.acp.env?.() || this.acp.env || {}) };
+    // Agents whose CLI has no ACP subcommand spawn a bridge instead (see
+    // acpAdapter.js), which may need installing on this machine the first time.
+    const bin = this.acp.adapter
+      ? (await ensureAcpAdapter(this.acp.adapter)) ||
+        resolveAgentBin({ envVar, exe, versionsDir, extraDirs })
+      : resolveAgentBin({ envVar, exe, versionsDir, extraDirs });
 
     // Permission policy, most specific last: router default → per-connection →
     // request body → request header. The request layers let a client loosen or
@@ -470,9 +512,10 @@ export class AcpAgentExecutor extends BaseExecutor {
 
         // Inherit the parent environment: the CLI reads its stored auth and its
         // default model from its own config files. Nothing is injected — a bogus
-        // key here would override the agent's own credentials.
-        const env = { ...process.env };
-
+        // key here would override the agent's own credentials. A spec may add
+        // its own entries (CODEX_PATH and friends); those still merge over the
+        // inherited set rather than replacing it. Resolved out here because the
+        // `start()` callback below runs with the stream as `this`.
         const { cmd, args: spawnArgs, shell } = agentSpawnCommand(bin, args);
         const child = spawn(cmd, spawnArgs, {
           env,
