@@ -67,15 +67,24 @@ function writeCachedCatalog(providerId, catalog) {
  * `{ id, category, currentValue, options[] }` record.
  */
 function normalizeOption(opt) {
+  const contextWindow = Number(opt.contextWindow ?? opt.context_window ?? opt.limits?.contextWindow ?? opt.limits?.context_window);
   return {
     id: opt.id,
     category: opt.category || opt.id,
     name: opt.name || opt.id,
     description: opt.description || null,
     currentValue: opt.currentValue ?? null,
-    options: (opt.options || []).map((o) =>
-      typeof o === "string" ? { value: o, name: o, description: null } : { value: o.value, name: o.name || o.value, description: o.description || null }
-    ),
+    ...(Number.isFinite(contextWindow) && contextWindow > 0 ? { contextWindow } : {}),
+    options: (opt.options || []).map((o) => {
+      if (typeof o === "string") return { value: o, name: o, description: null };
+      const optionContextWindow = Number(o.contextWindow ?? o.context_window ?? o.limits?.contextWindow ?? o.limits?.context_window);
+      return {
+        value: o.value,
+        name: o.name || o.value,
+        description: o.description || null,
+        ...(Number.isFinite(optionContextWindow) && optionContextWindow > 0 ? { contextWindow: optionContextWindow } : {}),
+      };
+    }),
   };
 }
 
@@ -159,7 +168,13 @@ export function probeAcpCatalog(bin, spec, extraEnv = {}, timeoutMs = PROBE_TIME
           // The model list is the model option's values. An agent that instead
           // returns a flat `availableModels` (cursor) lands here too.
           const models = (modelOption?.options || (result.models || result.availableModels || []).map((m) =>
-            typeof m === "string" ? { value: m, name: m } : { value: m.modelId || m.id, name: m.name || m.modelId || m.id }
+            typeof m === "string" ? { value: m, name: m } : {
+        value: m.modelId || m.id,
+        name: m.name || m.modelId || m.id,
+        ...(Number.isFinite(Number(m.contextWindow ?? m.context_window ?? m.limits?.contextWindow ?? m.limits?.context_window))
+          ? { contextWindow: Number(m.contextWindow ?? m.context_window ?? m.limits?.contextWindow ?? m.limits?.context_window) }
+          : {}),
+      }
           )).map((m) => ({
             id: m.value,
             name: m.name || m.value,

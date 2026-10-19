@@ -425,6 +425,7 @@ export class AcpAgentExecutor extends BaseExecutor {
     const b = body ?? {};
     const contextWindow = getCapabilitiesForModel(this.providerId, model).contextWindow || 200000;
     const guardedBody = stripHistoryForContext(b, contextWindow);
+    if (guardedBody !== b) log?.debug?.(tag, `trimmed ACP history for ${model}`);
     const messages = extractMessages(guardedBody);
     const promptText = buildPromptText(messages);
     const workspaceCwd = resolveWorkspaceCwd(b);
