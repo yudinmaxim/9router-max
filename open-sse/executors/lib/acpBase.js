@@ -535,13 +535,16 @@ export class AcpAgentExecutor extends BaseExecutor {
         // its own entries (CODEX_PATH and friends); those still merge over the
         // inherited set rather than replacing it. Resolved out here because the
         // `start()` callback below runs with the stream as `this`.
-        const sessionKey = acpSessionKey({ provider: this.providerId, connection: bin, cwd: workspaceCwd, model });
+        const sessionConnection = credentials?.connectionId || credentials?.connectionName;
+        const sessionKey = sessionConnection
+          ? acpSessionKey({ provider: this.providerId, connection: sessionConnection, cwd: workspaceCwd, model })
+          : null;
         let pooled = null;
         let releaseSession = null;
         let child;
         let transport;
         const { cmd, args: spawnArgs, shell } = agentSpawnCommand(bin, args);
-        const existing = peekAcpSession(sessionKey);
+        const existing = sessionKey ? peekAcpSession(sessionKey) : null
         if (existing && !existing.dead && existing.sessionId) {
           const acquired = await acquireAcpSession(sessionKey);
           pooled = acquired.entry;
@@ -812,7 +815,7 @@ export class AcpAgentExecutor extends BaseExecutor {
               }
               sessionCreated = true;
               catalog = collectModelCatalog(res);
-              putAcpSession(sessionKey, { child, transport, sessionId, catalog });
+              if (sessionKey) putAcpSession(sessionKey, { child, transport, sessionId, catalog });
               const current = currentAgentModel(res);
               resolvedModelId = resolveAgentModelId(model, catalog, current);
               log?.debug?.(tag, `session=${sessionId} current=${current} requested=${model} → ${resolvedModelId}`);
@@ -1024,7 +1027,7 @@ export class AcpAgentExecutor extends BaseExecutor {
         });
 
         child.on("close", (code) => {
-          if (pooled) markAcpSessionDead(sessionKey);
+          if (pooled && sessionKey) markAcpSessionDead(sessionKey);
           if (finished) return;
           if (code !== 0 && !spawnError && !roleEmitted) {
             finish(`${label} CLI exited with code ${code}`);
