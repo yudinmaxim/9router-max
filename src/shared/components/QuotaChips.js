@@ -23,6 +23,8 @@ import { getQuotaColors, formatResetTime } from "@/shared/utils/quota";
 function Chip({ chip }) {
   const { provider, label, quota } = chip;
   const colors = getQuotaColors(quota.remaining);
+  // Below, not above: the chips live in the page header, so a tooltip opening
+  // upwards lands outside the viewport and gets cut off by the page edge.
   const tooltip = [
     `${label} · ${quota.label}`,
     `${quota.spent}% spent, ${quota.remaining}% left`,
@@ -30,7 +32,7 @@ function Chip({ chip }) {
   ].filter(Boolean).join(" ");
 
   return (
-    <Tooltip text={tooltip}>
+    <Tooltip text={tooltip} position="bottom">
       <div
         className={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface/70 px-2 text-xs ${colors.text}`}
         aria-label={`${label}, ${quota.label}: ${quota.spent} percent spent, ${quota.remaining} percent left`}
@@ -74,7 +76,7 @@ export default function QuotaChips() {
         <Chip key={chip.id} chip={chip} />
       ))}
       {overflow > 0 && (
-        <Tooltip text={`${overflow} more account(s) — open the Quota page`}>
+        <Tooltip text={`${overflow} more account(s) — open the Quota page`} position="bottom">
           <div className="flex h-8 shrink-0 items-center rounded-lg border border-border-subtle bg-surface/70 px-2 text-xs text-text-muted tabular-nums">
             +{overflow}
           </div>
