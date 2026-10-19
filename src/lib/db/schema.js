@@ -3,7 +3,7 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -117,6 +117,21 @@ export const TABLES = {
       updatedAt: "TEXT NOT NULL",
     },
     indexes: ["CREATE INDEX IF NOT EXISTS idx_combo_name ON combos(name)"],
+  },
+  // Per-caller step budget. Config and counter live in one row on purpose: a
+  // limit that is edited must take effect on the next request, and a fuse that
+  // resets when the router restarts is not a fuse. `scope` is `key:<id>`,
+  // `provider:<id>` or `global`. The counter is spent in a transaction so
+  // parallel requests from one agent cannot pass the ceiling together.
+  stepBudgets: {
+    columns: {
+      scope: "TEXT PRIMARY KEY",
+      limitSteps: "INTEGER NOT NULL",
+      windowMs: "INTEGER NOT NULL",
+      usedSteps: "INTEGER NOT NULL DEFAULT 0",
+      resetAt: "INTEGER NOT NULL DEFAULT 0",
+      updatedAt: "TEXT NOT NULL",
+    },
   },
   kv: {
     columns: {

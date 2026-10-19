@@ -80,6 +80,23 @@ export async function getKeyAccessContext(request) {
   };
 }
 
+/**
+ * The identity of the request's key, whether or not it is restricted.
+ *
+ * getKeyAccessContext() deliberately returns null for an unrestricted key — it
+ * answers "what may this key call", and an unrestricted key may call anything.
+ * But a step budget asks a different question: "who is this caller", and an
+ * unrestricted key is exactly as much an identity as a restricted one. Reading
+ * the id from the access context would leave every ordinary key without a scope
+ * of its own, and the budget would fall through to the provider.
+ */
+export async function getClientKeyId(request) {
+  const apiKey = extractClientApiKey(request);
+  if (!apiKey) return null;
+  const record = await getApiKeyByKey(apiKey);
+  return record?.id || null;
+}
+
 // Resolve the allow list once per request: combo names, resolved model ids,
 // and resolved provider ids (for provider-as-model kinds).
 async function getAllowSets(ctx) {
