@@ -1,19 +1,27 @@
 /**
- * Readiness probe for ACP agents.
+ * Working state for ACP agents.
  *
  * The providers page used to print a green "Ready" for every `noAuth` provider,
  * which covers every ACP agent — the badge was decorative, not a measurement.
  * An agent whose CLI was never installed looked identical to one that had just
- * answered a request. This module produces the real answer instead, in two tiers:
+ * answered a request.
  *
- *   cheap (default) — resolve the agent binary through the same lookup
- *     `AcpAgentExecutor` uses at request time. Answers "is it installed",
- *     costs a few `stat()` calls, safe to poll.
+ * An ACP agent also has nothing to "connect": no credential row, no login
+ * step. So the honest question is not "connected?" but "can it serve a
+ * request?", and there are only three lasting answers:
  *
- *   deep (`?probe=1`) — spawn the agent and complete the ACP `initialize`
- *     handshake. Answers "does it actually answer", which is what separates an
- *     installed-but-not-logged-in CLI from a working one. Costs a process
- *     spawn, so it stays opt-in and is cached briefly.
+ *   working — it completed an ACP `initialize` handshake
+ *   broken  — it is installed but does not answer (expired login, crash, ...)
+ *   missing — the CLI itself is not on this machine
+ *
+ * "Installed" on its own is not one of them. It was the old resting state, and
+ * it is indistinguishable from "broken" to anyone who has not clicked a check
+ * button — which is exactly how cursor-agent looked fine while refusing every
+ * request with "Authentication required". It survives only as `verifying`: a
+ * transient shown while the measurement runs, never as an end state.
+ *
+ * The verdict is measured (spawn + handshake) and persisted per agent, so the
+ * providers page is truthful on first paint and across restarts.
  *
  * Config-driven like the rest of the engine: the exe, env override, install
  * paths and install hint all come from the executor spec (see
@@ -25,14 +33,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { resolveAgentBin } from "./acpBase.js";
-import { getAdapterInstallInfo, resolveAcpAdapterBin } from "./acpAdapter.js";
+import { getAdapterInstallInfo, resolveAcpAdapterBin, acpAgentStateDir } from "./acpAdapter.js";
+import { probeAcpCatalog } from "./acpCatalog.js";
 
 /** Cheap status is stable for a while (installs don't appear mid-poll). */
 export const ACP_CHEAP_TTL_MS = 30000;
-/** Deep status re-runs often enough that a login/logout shows up promptly. */
+/** A measured verdict stays true this long before it is re-measured. */
+export const ACP_VERDICT_TTL_MS = 10 * 60 * 1000;
+/** An explicit user-triggered check re-measures regardless of the TTL. */
 export const ACP_DEEP_TTL_MS = 30000;
-/** An agent that hasn't answered `initialize` by then is not usable. */
-export const ACP_HANDSHAKE_TIMEOUT_MS = 8000;
+/** How long a "verifying" answer survives before the next poll re-reads. */
+export const ACP_VERIFYING_TTL_MS = 2000;
+/** An agent that can't start a session within this window is not usable. */
+export const ACP_HANDSHAKE_TIMEOUT_MS = 15000;
 
 /** JSON-RPC request id for the probe handshake. Arbitrary, just unique. */
 const PROBE_ID = 1;
@@ -40,14 +53,15 @@ const PROBE_CLIENT = { name: "9router", version: "probe" };
 
 // key: `${providerId}:${deep ? "deep" : "cheap"}` → { at, value }
 const cache = new Map();
+// key: providerId → in-flight measurement, so N pollers share one spawn
+const inflight = new Map();
 
-/** Statuses: installed · ready · unreachable · missing · unknown */
+/** Statuses: working · broken · missing · verifying */
 export const ACP_STATUS = {
-  READY: "ready",
-  INSTALLED: "installed",
-  UNREACHABLE: "unreachable",
+  WORKING: "working",
+  BROKEN: "broken",
   MISSING: "missing",
-  UNKNOWN: "unknown",
+  VERIFYING: "verifying",
 };
 
 /**
@@ -87,118 +101,57 @@ export function resolveInstalledBin(spec) {
 }
 
 /**
- * Complete one ACP `initialize` handshake against a freshly spawned agent.
- *
- * Mirrors the handshake the executor performs (see acpBase.js) but stops right
- * after the response: enough to prove the agent starts and speaks ACP, without
- * creating a session or burning a model turn.
+ * Last measured verdict, persisted next to the agent's adapter so it survives a
+ * restart. A verdict older than the TTL is treated as absent — the caller then
+ * re-measures instead of reporting a month-old "working".
  */
-function acpHandshake(bin, args, timeoutMs, extraEnv = {}) {
-  return new Promise((resolve) => {
-    let child = null;
-    let settled = false;
-    let stdout = "";
-    let stderr = "";
+function readVerdict(providerId) {
+  const dir = acpAgentStateDir(providerId);
+  if (!dir) return null;
+  try {
+    const verdict = JSON.parse(fs.readFileSync(path.join(dir, "verdict.json"), "utf8"));
+    return Date.now() - (verdict.measuredAt || 0) <= ACP_VERDICT_TTL_MS ? verdict : null;
+  } catch {
+    return null;
+  }
+}
 
-    const done = (result) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try {
-        child?.kill();
-      } catch {
-        /* already gone */
-      }
-      resolve(result);
-    };
-
-    const tail = () => stderr.trim().split("\n").slice(-2).join(" ").slice(0, 300) || null;
-
-    const timer = setTimeout(() => {
-      done({ ok: false, error: `no answer within ${timeoutMs}ms`, stderr: tail() });
-    }, timeoutMs);
-
-    try {
-      // Same env the executor would give it — an adapter that reads CODEX_PATH
-      // must be probed against the same codex it would actually drive.
-      child = spawn(bin, args, {
-        stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, ...extraEnv },
-      });
-    } catch (error) {
-      done({ ok: false, error: error.message, stderr: null });
-      return;
-    }
-
-    child.on("error", (error) => {
-      done({
-        ok: false,
-        error: error.code === "ENOENT" ? `${bin} not found` : error.message,
-        stderr: tail(),
-      });
-    });
-
-    child.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.stdout?.on("data", (chunk) => {
-      stdout += chunk.toString();
-      for (const line of stdout.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        let msg;
-        try {
-          msg = JSON.parse(trimmed);
-        } catch {
-          continue; // partial frame — keep buffering
-        }
-        if (msg.id !== PROBE_ID) continue;
-        if (msg.error) {
-          done({
-            ok: false,
-            error: msg.error.message || "handshake rejected",
-            stderr: tail(),
-          });
-        } else {
-          done({ ok: true, error: null, stderr: null });
-        }
-        return;
-      }
-    });
-
-    child.stdin?.on("error", () => {
-      /* agent closed stdin before answering — the exit/error handler reports it */
-    });
-
-    child.stdin?.write(
-      `${JSON.stringify({
-        jsonrpc: "2.0",
-        id: PROBE_ID,
-        method: "initialize",
-        params: {
-          protocolVersion: 1,
-          clientInfo: PROBE_CLIENT,
-          capabilities: {},
-        },
-      })}\n`,
-    );
-  });
+function writeVerdict(providerId, verdict) {
+  const dir = acpAgentStateDir(providerId);
+  if (!dir) return;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "verdict.json"), JSON.stringify(verdict));
+  } catch {
+    /* a missing verdict only means the next read measures again */
+  }
 }
 
 /**
  * Probe one agent.
  *
+ * `deep` measures now (spawn + handshake) and stores the verdict. Without it,
+ * the stored verdict answers, and an agent that has never been measured is
+ * reported as `verifying` while a measurement runs in the background — the
+ * caller never waits on a spawn it did not ask for.
+ *
  * @param {object} spec           executor spec + `{ providerId }`
  * @param {object} [options]
- * @param {boolean} [options.deep]  spawn and handshake instead of only resolving
- * @returns {Promise<{providerId:string,status:string,bin:string,resolvedPath:string|null,detail:string|null,checkedAt:number}>}
+ * @param {boolean} [options.deep]  measure now instead of reading the verdict
  */
 export async function probeAcpAgent(spec, { deep = false } = {}) {
   const providerId = spec.providerId;
   const key = `${providerId}:${deep ? "deep" : "cheap"}`;
   const cached = cache.get(key);
-  const ttl = deep ? ACP_DEEP_TTL_MS : ACP_CHEAP_TTL_MS;
+  // A cached "verifying" gets a much shorter life than a settled answer: the
+  // measurement it kicked off finishes in seconds, and the next poll has to be
+  // able to see that. Caching it for the full cheap TTL left the badge stuck
+  // on "Checking…" for 30 seconds after the truth was already known.
+  const ttl = deep
+    ? ACP_DEEP_TTL_MS
+    : cached?.value?.status === ACP_STATUS.VERIFYING
+      ? ACP_VERIFYING_TTL_MS
+      : ACP_CHEAP_TTL_MS;
   if (cached && Date.now() - cached.at < ttl) return cached.value;
 
   const bin = resolveInstalledBin(spec);
@@ -215,46 +168,74 @@ export async function probeAcpAgent(spec, { deep = false } = {}) {
         installing: adapter.installing,
       }
     : null;
+  const base = {
+    providerId,
+    bin: spec.exe,
+    resolvedPath: bin,
+    setup,
+  };
   let value;
 
   if (!bin) {
     value = {
-      providerId,
+      ...base,
       status: ACP_STATUS.MISSING,
-      bin: spec.exe,
-      resolvedPath: null,
       detail: spec.installHint || null,
-      setup,
       checkedAt: Date.now(),
     };
-  } else if (!deep) {
-    value = {
-      providerId,
-      status: ACP_STATUS.INSTALLED,
-      bin: spec.exe,
-      resolvedPath: bin,
-      detail: null,
-      setup,
-      checkedAt: Date.now(),
-    };
-  } else {
+  } else if (deep) {
     // An adapter-backed agent is spawned bare (`args: []`) — the bridge itself
     // speaks ACP, there is no `acp` subcommand to append.
-    const result = await acpHandshake(
-      bin,
-      spec.adapter ? [] : spec.args || ["acp"],
-      ACP_HANDSHAKE_TIMEOUT_MS,
-      typeof spec.env === "function" ? spec.env() : spec.env || {}
+    // "Working" must mean the agent can actually start a session, not merely that
+    // it speaks the handshake. Those are different: cursor-agent answers
+    // `initialize` happily and then refuses `session/new` with "Authentication
+    // required", so a handshake-only check reported a broken agent as working.
+    // This walks initialize → session/new, which is the same path a real
+    // request takes, and it refreshes the model catalog as a side effect.
+    const result = await probeAcpCatalog(bin, spec, typeof spec.env === "function" ? spec.env() : spec.env || {}, ACP_HANDSHAKE_TIMEOUT_MS).then(
+      (catalog) => ({ ok: true, catalog }),
+      (error) => ({ ok: false, error: error.message })
     );
-    value = {
-      providerId,
-      status: result.ok ? ACP_STATUS.READY : ACP_STATUS.UNREACHABLE,
-      bin: spec.exe,
-      resolvedPath: bin,
-      detail: result.ok ? null : [result.error, result.stderr].filter(Boolean).join(" — ") || null,
-      setup,
-      checkedAt: Date.now(),
+    const verdict = {
+      working: result.ok,
+      detail: result.ok ? null : result.error,
+      measuredAt: Date.now(),
     };
+    writeVerdict(providerId, verdict);
+    value = {
+      ...base,
+      status: verdict.working ? ACP_STATUS.WORKING : ACP_STATUS.BROKEN,
+      detail: verdict.detail,
+      checkedAt: verdict.measuredAt,
+    };
+    // Refresh the cheap entry as well. A measurement that disagrees with it
+    // would otherwise keep being served for the rest of the cheap TTL, and the
+    // badge would contradict the check the user just ran.
+    cache.set(`${providerId}:cheap`, { at: Date.now(), value });
+  } else {
+    const verdict = readVerdict(providerId);
+    if (verdict) {
+      value = {
+        ...base,
+        status: verdict.working ? ACP_STATUS.WORKING : ACP_STATUS.BROKEN,
+        detail: verdict.detail,
+        checkedAt: verdict.measuredAt,
+      };
+    } else {
+      // Never measured: say so, and measure in the background so the next poll
+      // has the truth. The spawn is shared across pollers.
+      value = {
+        ...base,
+        status: ACP_STATUS.VERIFYING,
+        detail: "not checked yet",
+        checkedAt: Date.now(),
+      };
+      if (!inflight.has(providerId)) {
+        const p = probeAcpAgent(spec, { deep: true }).finally(() => inflight.delete(providerId));
+        inflight.set(providerId, p);
+        p.catch(() => {});
+      }
+    }
   }
 
   cache.set(key, { at: Date.now(), value });
@@ -264,4 +245,18 @@ export async function probeAcpAgent(spec, { deep = false } = {}) {
 /** Drop cached results — used after an install, so the next read is fresh. */
 export function clearAcpStatusCache() {
   cache.clear();
+}
+
+/**
+ * Drop the stored verdict as well. An install changes what gets spawned, so a
+ * verdict measured before it is no evidence about what happens after.
+ */
+export function clearAcpVerdict(providerId) {
+  const dir = acpAgentStateDir(providerId);
+  if (!dir) return;
+  try {
+    fs.rmSync(path.join(dir, "verdict.json"), { force: true });
+  } catch {
+    /* nothing to clear */
+  }
 }

@@ -16,7 +16,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { acpAgentDir } from "./acpAdapter.js";
+import { acpAgentStateDir } from "./acpAdapter.js";
 
 const PROBE_TIMEOUT_MS = 20000;
 const PROBE_ID_INIT = 1;
@@ -27,7 +27,7 @@ const PROBE_CLIENT = { name: "9router", version: "catalog-probe" };
 export const CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
 
 function catalogPath(providerId) {
-  const dir = acpAgentDir(providerId);
+  const dir = acpAgentStateDir(providerId);
   return dir ? path.join(dir, "catalog.json") : null;
 }
 

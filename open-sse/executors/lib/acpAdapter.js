@@ -49,11 +49,23 @@ function adapterDir(providerId) {
 }
 
 /**
- * Per-agent data dir: holds both the adapter install and the catalog cache that
- * discovery reads, so the two live together.
+ * Per-agent data dir: holds the adapter install and the discovery results that
+ * sit next to it.
  */
 export function acpAgentDir(providerId) {
   return adapterDir(providerId);
+}
+
+/**
+ * Per-agent state dir for any ACP provider, adapter-backed or not.
+ *
+ * cursor / opencode / omp have no ACP_ADAPTERS entry, so their measured verdict
+ * and model catalog need a home that does not depend on one. Registry ids are
+ * already filesystem-safe; the sanitize is belt-and-braces.
+ */
+export function acpAgentStateDir(providerId) {
+  const safe = String(providerId || "").replace(/[^a-z0-9._-]/gi, "_");
+  return safe ? path.join(AGENTS_DIR, safe) : null;
 }
 
 function installedBin(providerId) {

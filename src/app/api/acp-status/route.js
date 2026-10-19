@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { PROVIDERS } from "open-sse/config/providers.js";
 import { getExecutor } from "open-sse/executors/index.js";
-import { probeAcpAgent, ACP_STATUS, clearAcpStatusCache } from "open-sse/executors/lib/acpStatus.js";
+import { probeAcpAgent, ACP_STATUS, clearAcpStatusCache, clearAcpVerdict } from "open-sse/executors/lib/acpStatus.js";
 import { installAcpAdapter, getAdapterInstallInfo } from "open-sse/executors/lib/acpAdapter.js";
 
 export const dynamic = "force-dynamic";
@@ -31,7 +31,7 @@ export async function GET(request) {
         if (!spec) {
           return {
             providerId: id,
-            status: ACP_STATUS.UNKNOWN,
+            status: ACP_STATUS.VERIFYING,
             bin: null,
             resolvedPath: null,
             detail: "no ACP executor registered for this provider",
@@ -84,6 +84,10 @@ export async function POST(request) {
     const installed = await installAcpAdapter(spec.adapter);
     // A fresh answer beats a cached "missing" that would keep the badge amber.
     clearAcpStatusCache();
+    // The verdict measured before the install describes a different binary, so
+    // drop it too — otherwise the badge would report "Not working" for up to
+    // the verdict TTL on an agent that now works.
+    clearAcpVerdict(providerId);
 
     const status = await probeAcpAgent({ ...spec, providerId }, { deep: false });
     return NextResponse.json({

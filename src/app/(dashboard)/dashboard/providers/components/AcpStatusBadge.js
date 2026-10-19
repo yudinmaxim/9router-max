@@ -15,12 +15,15 @@ import { Badge, Button } from "@/shared/components";
 
 const POLL_MS = 30000;
 
+// An ACP agent has no connection to make: no credential row, no login step.
+// So the badge answers the only question that matters — can it serve a request
+// — and "Installed" is deliberately not an end state, because it reads the
+// same as "broken" to anyone who hasn't opened the popover.
 const STATUS_VIEW = {
-  ready: { variant: "success", label: "Ready" },
-  installed: { variant: "default", label: "Installed" },
-  unreachable: { variant: "error", label: "Unreachable" },
+  working: { variant: "success", label: "Working" },
+  broken: { variant: "error", label: "Not working" },
   missing: { variant: "warning", label: "Not installed" },
-  unknown: { variant: "default", label: "Unknown" },
+  verifying: { variant: "default", label: "Checking…" },
 };
 
 export default function AcpStatusBadge({ providerId }) {
@@ -104,7 +107,7 @@ export default function AcpStatusBadge({ providerId }) {
 
   if (loading) return null;
 
-  const view = STATUS_VIEW[entry?.status] || STATUS_VIEW.unknown;
+  const view = STATUS_VIEW[entry?.status] || STATUS_VIEW.verifying;
 
   return (
     <span className="relative inline-flex" ref={ref}>
@@ -148,8 +151,8 @@ export default function AcpStatusBadge({ providerId }) {
               <span className="block break-words text-text-muted">{entry.detail}</span>
             )}
             <span className="block text-text-muted">
-              {entry?.status === "installed"
-                ? "Installed but not handshaken — run a check to confirm it answers."
+              {entry?.status === "verifying"
+                ? "Measuring whether the agent answers — this runs on its own, no need to check."
                 : ""}
             </span>
             {entry?.setup?.needed && (
