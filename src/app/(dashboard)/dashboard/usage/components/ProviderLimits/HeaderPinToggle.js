@@ -40,7 +40,7 @@ export default function HeaderPinToggle({ connectionId }) {
 
   return (
     <label
-      title={translate("Keep this widget in the header, whatever the numbers say")}
+      title={translate("Show this widget in the header")}
       className="flex h-8 cursor-pointer select-none items-center gap-1.5 rounded-lg px-2 text-[11px] text-text-muted transition-colors hover:bg-black/5 dark:hover:bg-white/5"
     >
       <input
@@ -48,10 +48,10 @@ export default function HeaderPinToggle({ connectionId }) {
         checked={pinned}
         disabled={busy}
         onChange={toggle}
-        aria-label={translate("Always show in header")}
+        aria-label={translate("Show in header")}
         className="size-3.5 accent-[var(--color-primary)]"
       />
-      <span className="hidden lg:inline">{translate("Always")}</span>
+      <span className="hidden lg:inline">{translate("Show in header")}</span>
     </label>
   );
 }

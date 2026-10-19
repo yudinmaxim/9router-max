@@ -42,7 +42,6 @@ export default function DashboardLayout({ children }) {
   const fetchSettings = useSettingsStore((state) => state.fetchSettings);
   const startQuotaPolling = useQuotaStore((state) => state.start);
   const stopQuotaPolling = useQuotaStore((state) => state.stop);
-  const setQuotaVisible = useQuotaStore((state) => state.setVisible);
 
   useEffect(() => {
     fetchSettings();
@@ -52,14 +51,13 @@ export default function DashboardLayout({ children }) {
   // (`<Header key={pathname} />` below), so a timer started inside it would be
   // torn down and restarted on every page change — and every restart is a fresh
   // pass over the provider list.
-  const quotaChipsOn = settings?.showQuotaInHeader === true;
+  // The header always polls. Which widgets it shows is the operator's choice,
+  // made per widget on the quota page; a global switch on top of that could only
+  // contradict it — with the switch off, no widget could be shown at all.
   useEffect(() => {
-    if (quotaChipsOn) startQuotaPolling();
-    else stopQuotaPolling();
-    setQuotaVisible(quotaChipsOn);
-  }, [quotaChipsOn, startQuotaPolling, stopQuotaPolling, setQuotaVisible]);
-
-  useEffect(() => () => stopQuotaPolling(), [stopQuotaPolling]);
+    startQuotaPolling();
+    return () => stopQuotaPolling();
+  }, [startQuotaPolling, stopQuotaPolling]);
 
   // Preload heavy usage charts in background when browser is idle
   useEffect(() => {

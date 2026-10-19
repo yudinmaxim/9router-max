@@ -105,15 +105,9 @@ export const useQuotaStore = create((set, get) => ({
   chips: [],
   loading: false,
   lastFetched: 0,
-  visible: false,
   overflow: 0,
   // Connection ids the operator pinned into the header.
   pins: [],
-
-  setVisible: (visible) => {
-    if (visible) set({ visible: true });
-    else set({ visible: false, chips: [], overflow: 0 });
-  },
 
   /**
    * Pin a connection into the header, or let it go back to the automatic

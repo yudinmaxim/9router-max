@@ -53,17 +53,11 @@ function Chip({ chip }) {
         <span className="hidden max-w-[92px] truncate text-text-secondary lg:inline">
           {chip.showAccount ? chip.account : quota.label}
         </span>
+        {/* Spent over what is left. The slash says the same thing the arrow
+            did — the first number is gone, the second is what remains. */}
         <span className="whitespace-nowrap tabular-nums font-medium">
-          {quota.spent}% <span className="text-text-muted">→</span> {quota.remaining}%
+          {quota.spent}% <span className="text-text-muted">/</span> {quota.remaining}%
         </span>
-        {/* A pinned chip is here because the operator asked for it, not because
-            it looked tightest. The pin says so, so a chip sitting above a
-            tighter one does not read as a mis-measurement. */}
-        {chip.pinned && (
-          <span className="material-symbols-outlined text-[13px] opacity-70" title="Always shown">
-            push_pin
-          </span>
-        )}
       </div>
     </Tooltip>
   );

@@ -16,7 +16,6 @@ const DEFAULT_SETTINGS = {
   quotaVisibility: {},
   // Quota chips in the header. Off by default: the chips poll every provider on
   // a timer, and an operator who never asked for them should not pay for that.
-  showQuotaInHeader: false,
   comboStrategy: "fallback",
   comboStickyRoundRobinLimit: 1,
   comboStrategies: {},

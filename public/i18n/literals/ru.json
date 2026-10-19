@@ -204,5 +204,7 @@
   "Cursor Models": "Модели Cursor",
   "Other Models": "Другие модели",
   "No connection": "нет подключения",
-  "Includes Cursor Grok and Composer": "Включает Cursor Grok и Composer"
+  "Includes Cursor Grok and Composer": "Включает Cursor Grok и Composer",
+  "Show in header": "Показать в заголовке",
+  "Left": "Осталось"
 }

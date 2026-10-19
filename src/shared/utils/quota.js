@@ -193,13 +193,11 @@ export function shortAccountLabel(connection) {
 /**
  * Which connections earn a chip in the header.
  *
- * A provider normally contributes one chip — a second login of the same
- * provider would just repeat it. But a pinned connection is the operator's own
- * choice, so it always contributes its own chip: pin one of two Codex accounts
- * and that account is the Codex chip; pin both and the header carries both.
- *
- * A provider with a pinned connection contributes no automatic one, or the
- * operator would see the account they did not ask for next to the one they did.
+ * Only the ones the operator ticked. The header used to decide for itself —
+ * one chip per provider, the scale closest to running out — and a global
+ * switch turned the whole strip on or off. Both are gone: the checkbox on the
+ * widget card is the only control, so a chip is in the header because it was
+ * asked for, not because the numbers looked tight.
  *
  * @param {Array<{id:string,provider:string,isActive?:boolean}>} connections
  * @param {string[]} pinnedIds
@@ -207,21 +205,7 @@ export function shortAccountLabel(connection) {
 export function chooseHeaderConnections(connections, pinnedIds) {
   const all = Array.isArray(connections) ? connections : [];
   const pins = Array.isArray(pinnedIds) ? pinnedIds : [];
-  const pinned = all.filter((c) => pins.includes(c.id));
-  const providersWithPin = new Set(pinned.map((c) => c.provider));
-
-  const chosen = new Map();
-  for (const c of pinned) chosen.set(c.id, c);
-
-  const seenProviders = new Set();
-  for (const c of all) {
-    if (c?.isActive === false) continue;
-    if (providersWithPin.has(c.provider)) continue;
-    if (seenProviders.has(c.provider)) continue;
-    seenProviders.add(c.provider);
-    chosen.set(c.id, c);
-  }
-  return [...chosen.values()];
+  return all.filter((c) => pins.includes(c.id));
 }
 
 /**

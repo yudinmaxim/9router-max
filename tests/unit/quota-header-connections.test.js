@@ -8,36 +8,28 @@ import { chooseHeaderConnections, selectHeaderChips, shortAccountLabel } from "@
 describe("Which connections earn a chip", () => {
   const conn = (id, provider, isActive = true) => ({ id, provider, isActive });
 
-  it("gives one chip per provider when nothing is pinned", () => {
+  it("shows nothing when nothing is ticked", () => {
     const chosen = chooseHeaderConnections(
       [conn("a", "codex"), conn("b", "codex"), conn("c", "cursor")],
       [],
     );
-    expect(chosen.map((c) => c.id)).toEqual(["a", "c"]);
+    expect(chosen).toEqual([]);
   });
 
-  it("shows the pinned account instead of the automatic one", () => {
+  it("shows the ticked account and only it", () => {
     const chosen = chooseHeaderConnections([conn("a", "codex"), conn("b", "codex")], ["b"]);
     expect(chosen.map((c) => c.id)).toEqual(["b"]);
   });
 
-  it("shows both accounts when both are pinned", () => {
+  it("shows both accounts when both are ticked", () => {
     const chosen = chooseHeaderConnections([conn("a", "codex"), conn("b", "codex")], ["a", "b"]);
     expect(chosen.map((c) => c.id)).toEqual(["a", "b"]);
   });
 
-  it("keeps other providers on their automatic chip", () => {
+  it("keeps other providers untouched", () => {
     const chosen = chooseHeaderConnections(
       [conn("a", "codex"), conn("b", "codex"), conn("c", "cursor")],
       ["b"],
-    );
-    expect(chosen.map((c) => c.id)).toEqual(["b", "c"]);
-  });
-
-  it("skips a disabled connection unless it was pinned on purpose", () => {
-    const chosen = chooseHeaderConnections(
-      [conn("a", "codex", false), conn("b", "codex")],
-      [],
     );
     expect(chosen.map((c) => c.id)).toEqual(["b"]);
   });
