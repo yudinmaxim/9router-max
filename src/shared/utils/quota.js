@@ -9,6 +9,52 @@
  */
 
 /**
+ * The quota rows of one connection, whatever shape the provider sent them in.
+ *
+ * Providers do not agree on the shape, and the difference matters: Cursor and
+ * Claude send a list of rows, while Codex sends an object keyed by window
+ * ("session", "weekly", "review_session", …). Code that assumed a list saw an
+ * empty list for Codex — no rows, no table, and the agent card took the place
+ * of the quota windows the operator came for.
+ *
+ * So the shape is normalised here, once, and the provider's own units are
+ * labelled as the provider states them: Codex counts a window in percent of
+ * itself, so its rows are marked `percentBased` and read "45% used" instead of
+ * "45 / 100".
+ *
+ * @param {string} provider
+ * @param {Array|Object|undefined} quotas
+ * @returns {Array<Object>} rows, always an array
+ */
+export function normalizeQuotaRows(provider, quotas) {
+  if (Array.isArray(quotas)) return quotas;
+  if (!quotas || typeof quotas !== "object") return [];
+
+  const providerKey = String(provider || "").toLowerCase();
+  if (providerKey !== "codex") return [];
+
+  const names = {
+    session: "5h",
+    weekly: "Weekly",
+    review_session: "Review (5h)",
+    review_weekly: "Review (Weekly)",
+    spark_session: "Spark (5h)",
+    spark_weekly: "Spark (Weekly)",
+  };
+
+  return Object.entries(quotas).map(([quotaType, quota]) => ({
+    name: names[quotaType] || quotaType,
+    quotaType,
+    used: quota?.used || 0,
+    total: quota?.total || 0,
+    remaining: quota?.remaining,
+    resetAt: quota?.resetAt || null,
+    // "45" here is 45% of the window, not 45 calls out of 100.
+    percentBased: true,
+  }));
+}
+
+/**
  * Format ISO date string to countdown format (inspired by vscode-antigravity-cockpit)
  * @param {string|Date} date - ISO date string or Date object
  * @returns {string} Formatted countdown (e.g., "2d 5h 30m", "4h 40m", "15m") or "-"
@@ -76,7 +122,7 @@ export function formatResetTime(date) {
  *
  * @returns {Array<{label: string, spent: number, remaining: number, resetAt: ?string}>}
  */
-export function pickHeaderQuotas(payload) {
+export function pickHeaderQuotas(payload, provider) {
   if (!payload || typeof payload !== "object") return [];
 
   const bars = payload.spendBars;
@@ -101,7 +147,7 @@ export function pickHeaderQuotas(payload) {
   }
   if (out.length > 0) return out;
 
-  const rows = Array.isArray(payload.quotas) ? payload.quotas : [];
+  const rows = normalizeQuotaRows(provider || payload.provider, payload.quotas);
   let tightest = null;
   for (const row of rows) {
     if (!row || row.unlimited) continue;

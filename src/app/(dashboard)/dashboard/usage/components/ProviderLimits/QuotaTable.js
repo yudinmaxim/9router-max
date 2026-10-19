@@ -124,6 +124,16 @@ export default function QuotaTable({
         {currentPageRows.map((quota) => {
           const isUnlimited = quota.unlimited === true;
           const isCreditBalance = quota.isCreditBalance === true;
+          // A provider that states its window as a percentage (Codex) is not
+          // talking about counts: "45" is 45% of the window, so printing
+          // "45 / 100" would read like 45 calls out of 100.
+          const isPercentBased = quota.percentBased === true;
+          const usedText = isPercentBased
+            ? `${quota.used.toLocaleString()}% used`
+            : `${quota.used.toLocaleString()} / ${quota.total > 0 ? quota.total.toLocaleString() : "∞"}`;
+          const usedTitle = isPercentBased
+            ? `${quota.used.toLocaleString()}% of this window used`
+            : `${quota.used.toLocaleString()} / ${quota.total > 0 ? quota.total.toLocaleString() : "∞"}`;
           const colors = isCreditBalance
             ? { text: "text-blue-600 dark:text-blue-400", bg: "bg-blue-500", bgLight: "bg-blue-500/10", emoji: "💰" }
             : getColorClasses(quota.remaining);
@@ -169,14 +179,14 @@ export default function QuotaTable({
                         ? `${quota.used.toLocaleString()} used · Unlimited`
                         : isCreditBalance
                         ? `Credit balance: ${quota.total.toFixed(2)} ${quota.currency || ""}`
-                        : `${quota.used.toLocaleString()} / ${quota.total > 0 ? quota.total.toLocaleString() : "∞"}`
+                        : usedTitle
                     }
                   >
                     {isUnlimited
                       ? `${quota.used.toLocaleString()} used · Unlimited`
                       : isCreditBalance
                       ? `Credit: ${quota.total.toFixed(2)} ${quota.currency || ""}`
-                      : `${quota.used.toLocaleString()} / ${quota.total > 0 ? quota.total.toLocaleString() : "∞"}`}
+                      : usedText}
                   </span>
                   <span className={`font-medium ${isUnlimited ? "text-green-600 dark:text-green-400" : isCreditBalance ? "text-blue-600 dark:text-blue-400" : colors.text} shrink-0`}>
                     {isUnlimited ? "Unlimited" : isCreditBalance ? "" : `${quota.remaining}%`}

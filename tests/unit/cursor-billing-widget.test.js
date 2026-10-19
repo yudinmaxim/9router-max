@@ -133,6 +133,23 @@ describe("Cursor widget wiring", () => {
 
   it("renders the widget off those fields", async () => {
     const { readFile } = await import("node:fs/promises");
+    // The card body moved into its own dispatcher: one widget per provider,
+    // picked from what the provider actually returned. The wiring this test
+    // pins went with it, so the source it reads moved with it.
+    const src = await readFile(
+      new URL(
+        "../../src/app/(dashboard)/dashboard/usage/components/ProviderLimits/QuotaWidget.js",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    expect(src).toMatch(/quota\.spendBars/);
+    expect(src).toMatch(/<CursorQuotaWidget/);
+    expect(src).toMatch(/planLimits=\{quota\.planLimits\}/);
+  });
+
+  it("keeps the dispatcher in the card it belongs to", async () => {
+    const { readFile } = await import("node:fs/promises");
     const src = await readFile(
       new URL(
         "../../src/app/(dashboard)/dashboard/usage/components/ProviderLimits/index.js",
@@ -140,7 +157,7 @@ describe("Cursor widget wiring", () => {
       ),
       "utf8",
     );
-    expect(src).toMatch(/quota\?\.spendBars\s*\?\s*\(\s*<CursorQuotaWidget/);
-    expect(src).toMatch(/planLimits=\{quota\.planLimits\}/);
+    expect(src).toMatch(/import QuotaWidget from "\.\/QuotaWidget"/);
+    expect(src).toMatch(/<QuotaWidget/);
   });
 });

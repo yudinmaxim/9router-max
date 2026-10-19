@@ -3,13 +3,11 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import ProviderIcon from "@/shared/components/ProviderIcon";
-import QuotaTable from "./QuotaTable";
-import CursorQuotaWidget from "./CursorQuotaWidget";
-import { fmt } from "../UsageTable";
+import QuotaWidget from "./QuotaWidget";
 import Toggle from "@/shared/components/Toggle";
 import Tooltip from "@/shared/components/Tooltip";
 import { translate } from "@/i18n/runtime";
-import { computeTierShares } from "@/lib/quotaTiers";
+import { normalizeQuotaRows } from "@/shared/utils/quota";
 import {
   parseQuotaData,
   calculatePercentage,
@@ -99,12 +97,6 @@ function kiroRegion(conn) {
   const seg = typeof arn === "string" ? arn.split(":")[3] : "";
   return seg || "";
 }
-
-// English is the source string; translate() maps it through the locale file.
-const TIER_LABELS = [
-  ["cursorModels", "Cursor Models", "Includes Cursor Grok and Composer"],
-  ["otherModels", "Other Models"],
-];
 
 const AGENT_QUOTA_UNSUPPORTED =
   "Runs on your own subscription \u2014 the router has no upstream quota to report.";
@@ -1163,14 +1155,12 @@ export default function ProviderLimits() {
           const resetCreditCount = getCodexResetCreditCount(quota);
           const isResettingLimit = resettingLimitId === conn.id;
           const rowBusy = deletingId === conn.id || togglingId === conn.id || isResettingLimit;
-          const rawQuotas = quota?.quotas || [];
+          // Codex sends its windows as an object keyed by window name, the
+          // others as a list. Normalised here so the table, the visibility
+          // filter and the widget dispatch all see the same rows.
+          const rawQuotas = normalizeQuotaRows(conn.provider, quota?.quotas);
           const visibleQuotas = filterQuotasByVisibility(conn.provider, rawQuotas, quotaVisibility);
           const hiddenQuotaRows = getHiddenQuotaRows(conn.provider, rawQuotas, quotaVisibility);
-          // Percentages are shares of the total spend, computed once per card
-          // rather than inside the row so every bar is measured against the same
-          // denominator.
-          const shareData = computeTierShares(quota?.localUsage?.tiers);
-          const shareOf = (key) => shareData.shares[key] || { pct: 0, hasTraffic: false };
 
           return (
             <Card
@@ -1388,137 +1378,17 @@ export default function ProviderLimits() {
                     </span>
                     <p className="mt-1.5 text-xs text-text-muted">{error}</p>
                   </div>
-                ) : quota?.spendBars ? (
-                  <CursorQuotaWidget
-                    spendBars={quota.spendBars}
-                    planLimits={quota.planLimits}
+                ) : (
+                  <QuotaWidget
+                    provider={conn.provider}
+                    quota={quota}
+                    visibleQuotas={visibleQuotas}
+                    onHideQuota={(quotaRow) => handleHideQuota(conn.provider, quotaRow)}
+                    quotaSortMode={quotaSortMode}
                     translate={translate}
                   />
-                ) : quota?.localUsage ? (
-                  <div className="flex flex-col gap-3 py-3">
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <div>
-                        <p className="text-lg font-semibold text-text-main">
-                          {fmt(quota.localUsage.requests)}
-                        </p>
-                        <p className="text-[10px] text-text-muted">{translate("Requests")}</p>
-                      </div>
-                      <div>
-                        <p className="text-lg font-semibold text-text-main">
-                          {fmt(quota.localUsage.promptTokens)}
-                        </p>
-                        <p className="text-[10px] text-text-muted">{translate("Input tokens")}</p>
-                      </div>
-                      <div>
-                        <p className="text-lg font-semibold text-text-main">
-                          {quota.localUsage.cost > 0
-                            ? `$${quota.localUsage.cost.toFixed(4)}`
-                            : "—"}
-                        </p>
-                        <p className="text-[10px] text-text-muted">{translate("Cost")}</p>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-2 border-t border-black/5 pt-2 dark:border-white/5">
-                      {TIER_LABELS.map(([key, label, hint]) => {
-                        const t = (quota.localUsage.tiers || {})[key];
-                        const { pct, hasTraffic } = shareOf(key);
-                        return (
-                          <div key={key} className="flex flex-col gap-1">
-                            <div className="flex items-start justify-between gap-2 text-[11px]">
-                              <span className="min-w-0 text-text-muted">
-                                {translate(label)}
-                                {hint ? (
-                                  <span className="ml-1 text-text-muted/70">
-                                    · {translate(hint)}
-                                  </span>
-                                ) : null}
-                              </span>
-                              <span className="shrink-0 text-sm font-semibold text-text-main">
-                                {hasTraffic ? `${pct}%` : translate("No data")}
-                              </span>
-                            </div>
-                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
-                              <div
-                                className="h-full rounded-full bg-primary transition-all"
-                                style={{ width: `${hasTraffic ? Math.max(pct, 2) : 0}%` }}
-                              />
-                            </div>
-                            {hasTraffic ? (
-                              <span className="text-[10px] text-text-muted/70">
-                                {fmt(t.promptTokens + t.completionTokens)} tok · ${t.cost.toFixed(4)}
-                              </span>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    <div className="flex flex-col gap-1 border-t border-black/5 pt-2 text-[11px] dark:border-white/5">
-                      {(quota.localUsage.models || []).map((m) => (
-                        <div key={m.model} className="flex items-center justify-between gap-2">
-                          <span className="min-w-0 truncate text-text-muted">
-                            {m.model}
-                            <span className="ml-1 text-text-muted/70">
-                              · {fmt(m.promptTokens + m.completionTokens)} tok
-                            </span>
-                          </span>
-                          <span className="shrink-0 text-text-main">
-                            {m.cost > 0
-                              ? `$${m.cost.toFixed(4)}`
-                              : translate("No tariff")}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="flex flex-col gap-1 border-t border-black/5 pt-2 text-[11px] dark:border-white/5">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-text-muted">{translate("Grok, weekly")}</span>
-                        <span className="shrink-0 text-sm font-semibold text-text-main">
-                          {quota.localUsage.grokWeekly
-                            ? `${quota.localUsage.grokWeekly.remainingPercentage ?? 0}%`
-                            : translate("No connection")}
-                        </span>
-                      </div>
-                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
-                        <div
-                          className="h-full rounded-full bg-primary transition-all"
-                          style={{
-                            width: `${quota.localUsage.grokWeekly?.remainingPercentage || 0}%`,
-                          }}
-                        />
-                      </div>
-                    </div>
-
-                    {!quota.localUsage.fullyPriced && (
-                      <p className="text-[10px] leading-relaxed text-text-muted">
-                        {translate(
-                          "Some models carry no price, so the total understates spend. Set one in Settings → Pricing."
-                        )}
-                      </p>
-                    )}
-                  </div>
-                ) : quota?.message || quota?.unsupported ? (
-                  <div className="text-center py-5">
-                    <p className="text-xs text-text-muted">
-                      {quota.unsupported === "own-subscription"
-                        ? translate(AGENT_QUOTA_UNSUPPORTED)
-                        : quota.message}
-                    </p>
-                  </div>
-                ) : (
-                  <QuotaTable
-                    quotas={visibleQuotas}
-                    compact
-                    sortMode="default"
-                    showSortLabel={
-                      conn.provider === "codex" && quotaSortMode !== "default"
-                    }
-                    onHideQuota={(quotaRow) => handleHideQuota(conn.provider, quotaRow)}
-                  />
                 )}
-                {quota?.unsupported === "own-subscription" && !error && !isLoading && (
+                {quota?.unsupported === "own-subscription" && !error && !isLoading && !quota?.localUsage && (
                   <p className="mt-2 px-1 text-[10px] leading-relaxed text-text-muted">
                     {translate(AGENT_QUOTA_UNSUPPORTED)}
                   </p>

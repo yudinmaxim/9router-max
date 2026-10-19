@@ -1,4 +1,5 @@
 import { getModelsByProviderId } from "open-sse/config/providerModels.js";
+import { normalizeQuotaRows } from "@/shared/utils/quota";
 import {
   formatResetTime,
   getQuotaColors,
@@ -443,26 +444,11 @@ export function parseQuotaData(provider, data) {
         break;
 
       case "codex":
-        if (data.quotas) {
-          Object.entries(data.quotas).forEach(([quotaType, quota]) => {
-            let displayName = quotaType;
-            if (quotaType === "spark_session") displayName = "Spark (5h)";
-            else if (quotaType === "spark_weekly") displayName = "Spark (Weekly)";
-            else if (quotaType === "session") displayName = "5h";
-            else if (quotaType === "weekly") displayName = "Weekly";
-            else if (quotaType === "review_session") displayName = "Review (5h)";
-            else if (quotaType === "review_weekly") displayName = "Review (Weekly)";
-
-            normalizedQuotas.push({
-              name: displayName,
-              quotaType,
-              used: quota.used || 0,
-              total: quota.total || 0,
-              remaining: quota.remaining,
-              resetAt: quota.resetAt || null,
-            });
-          });
-        }
+        // Codex sends its windows as an object keyed by window name, not as a
+        // list. The shared normaliser reads that shape and labels the windows
+        // the way Codex names them; the rows are also marked percent-based,
+        // because a window is a percentage of itself.
+        normalizedQuotas.push(...normalizeQuotaRows("codex", data.quotas));
         break;
 
       case "kiro":

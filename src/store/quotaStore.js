@@ -44,7 +44,9 @@ async function loadChips() {
         const res = await fetch(`/api/usage/${connection.id}`);
         if (!res.ok) return [];
         const payload = await res.json();
-        return pickHeaderQuotas(payload).map((quota) => ({
+        // The provider is known here, not in the response body: Codex sends its
+        // windows keyed by name, so the shape depends on whose they are.
+        return pickHeaderQuotas(payload, provider).map((quota) => ({
           // Scoped by connection and label: two scales of one account must not
           // collide on the same React key.
           id: `${connection.id}:${quota.label}`,
