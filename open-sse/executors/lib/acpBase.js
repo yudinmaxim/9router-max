@@ -63,6 +63,8 @@ import { ensureAcpAdapter } from "./acpAdapter.js";
 import { createAcpTransport } from "./acpTransport.js";
 import { acpSessionKey, acquireAcpSession, peekAcpSession, putAcpSession, markAcpSessionDead } from "./acpSessionPool.js";
 import { resolveWorkspaceCwd, buildPromptText, extractMessages, estimateTokens, agentSpawnCommand } from "./acpCommon.js";
+import { stripHistoryForContext } from "../../services/capacityAdapter.js";
+import { getCapabilitiesForModel } from "../../providers/capabilities.js";
 import {
   classifyAction,
   rememberToolKind,
@@ -421,7 +423,9 @@ export class AcpAgentExecutor extends BaseExecutor {
   async execute({ model, body, credentials, acpPermissions, acpSessionDefaults, mcpProxyTargets, signal, log }) {
     const { exe, envVar, args, tag, label, installHint, errorType, versionsDir, extraDirs } = this.acp;
     const b = body ?? {};
-    const messages = extractMessages(b);
+    const contextWindow = getCapabilitiesForModel(this.providerId, model).contextWindow || 200000;
+    const guardedBody = stripHistoryForContext(b, contextWindow);
+    const messages = extractMessages(guardedBody);
     const promptText = buildPromptText(messages);
     const workspaceCwd = resolveWorkspaceCwd(b);
     // Resolved here rather than inside the stream's start(), which runs with the
