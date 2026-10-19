@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import PropTypes from "prop-types";
 import {
   Card,
@@ -106,6 +106,8 @@ export default function ProvidersPage() {
   const [showAddAnthropicCompatibleModal, setShowAddAnthropicCompatibleModal] =
     useState(false);
   const [testingMode, setTestingMode] = useState(null);
+  const [checkingAgents, setCheckingAgents] = useState(false);
+  const [agentRefreshKey, setAgentRefreshKey] = useState(0);
   const [testResults, setTestResults] = useState(null);
   const [statusFilter, setStatusFilter] = useState("all");
   const notify = useNotificationStore();
@@ -239,6 +241,22 @@ export default function ProvidersPage() {
     );
   };
 
+  // Local agents have no connection row to test — the meaningful check is "does
+  // it answer", which is exactly what the badges measure. Trigger it for all of
+  // them at once; each badge picks up the fresh verdict on its next paint.
+  const handleCheckAllAgents = useCallback(async () => {
+    setCheckingAgents(true);
+    try {
+      await fetch("/api/acp-status?probe=1", { cache: "no-store" });
+    } catch {
+      /* the badges keep whatever they last knew */
+    } finally {
+      setCheckingAgents(false);
+      // Every badge re-reads on the spot rather than after its poll interval.
+      setAgentRefreshKey((k) => k + 1);
+    }
+  }, []);
+
   const handleBatchTest = async (mode, providerId = null) => {
     if (testingMode) return;
     setTestingMode(mode === "provider" ? providerId : mode);
@@ -316,13 +334,21 @@ export default function ProvidersPage() {
     ),
     "oauth",
   );
-  const freeEntries = Object.entries(FREE_PROVIDERS)
-    .filter(
-      ([key, info]) =>
-        !info.hidden &&
-        matchSearch(info.name) &&
-        matchStatus(getProviderStats(key, dualAuthTypes(info, key)), info.noAuth),
-    )
+  // Local agents run a binary on this machine instead of holding a credential.
+  // They are `category: "free"` in the registry, so they used to sit inside the
+  // Free list next to hosted free APIs — which reads as "the same kind of thing"
+  // when it is the opposite: no key to add, an install to do, a status worth
+  // measuring. They get their own section, like OAuth / Free / API Key.
+  const isLocalAgentEntry = ([, info]) => Boolean(info.localAgent);
+  const freeProviderEntries = Object.entries(FREE_PROVIDERS).filter(
+    ([key, info]) =>
+      !info.hidden &&
+      matchSearch(info.name) &&
+      matchStatus(getProviderStats(key, dualAuthTypes(info, key)), info.noAuth),
+  );
+  const localAgentEntries = sortByPriority(freeProviderEntries.filter(isLocalAgentEntry), "free");
+  const freeEntries = freeProviderEntries
+    .filter((entry) => !isLocalAgentEntry(entry))
     .sort(([, a], [, b]) => (b.noAuth ? 1 : 0) - (a.noAuth ? 1 : 0));
   // Free Tier cards may be oauth-only (e.g. kimchi) or dual-auth, so count via
   // dualAuthTypes per provider instead of a fixed "apikey" — otherwise oauth
@@ -512,6 +538,61 @@ export default function ProvidersPage() {
       </div>
       )}
 
+      {/* Local Agents — coding CLIs run on this machine (ACP over stdio).
+          Separate from Free because nothing here is a hosted API: each one is
+          an install on the user's disk, holding its own login, and its badge
+          is measured rather than assumed. */}
+      {localAgentEntries.length > 0 && (
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2 leading-tight">
+            Local Agents
+            <span
+              className="material-symbols-outlined text-[18px] text-text-muted"
+              title="Run a coding CLI on this machine over the Agent Client Protocol. No API key — sign in through the CLI itself."
+            >
+              info
+            </span>
+          </h2>
+          <button
+            onClick={handleCheckAllAgents}
+            disabled={checkingAgents}
+            className={`flex w-full items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors sm:w-auto sm:py-1.5 ${
+              checkingAgents
+                ? "bg-primary/20 border-primary/40 text-primary animate-pulse"
+                : "bg-bg border-border text-text-muted hover:text-text-main hover:border-primary/40"
+            }`}
+            title="Start each agent and confirm it answers"
+            aria-label="Check all Local Agents"
+          >
+            <span
+              className={`material-symbols-outlined text-[14px]${checkingAgents ? " animate-spin" : ""}`}
+            >
+              check_circle
+            </span>
+            {checkingAgents ? "Checking..." : "Check All"}
+          </button>
+        </div>
+        <p className="-mt-1 text-xs text-text-muted">
+          Each agent is a CLI you install yourself and sign in through directly. The badge shows whether
+          it is actually answering — not merely present.
+        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
+          {localAgentEntries.map(([key, info]) => (
+            <ProviderCard
+              key={key}
+              providerId={key}
+              provider={info}
+              stats={getProviderStats(key, dualAuthTypes(info, key))}
+              authType="free"
+              refreshKey={agentRefreshKey}
+              onToggle={(active) => handleToggleProvider(key, dualAuthTypes(info, key), active)}
+            />
+          ))}
+        </div>
+      </div>
+      )}
+
       {/* Free Tier Providers */}
       {(freeEntries.length > 0 || freeTierEntries.length > 0) && (
       <div className="flex flex-col gap-4">
@@ -694,7 +775,7 @@ export default function ProvidersPage() {
   );
 }
 
-function ProviderCard({ providerId, provider, stats, authType, onToggle }) {
+function ProviderCard({ providerId, provider, stats, authType, onToggle, refreshKey = 0 }) {
   const { connected, error, errorCode, errorTime, allDisabled } = stats;
   const isNoAuth = !!provider.noAuth;
   // Providers that run a local binary hold no credential, so there is no
@@ -754,7 +835,7 @@ function ProviderCard({ providerId, provider, stats, authType, onToggle }) {
                     </span>
                   </Badge>
                 ) : isLocalAgent ? (
-                  <AcpStatusBadge providerId={provider.id} />
+                  <AcpStatusBadge providerId={provider.id} refreshKey={refreshKey} />
                 ) : isNoAuth ? (
                   // A noAuth *service* — no credential to add and nothing
                   // spawned locally, so it is available by definition. Only
@@ -799,6 +880,7 @@ function ProviderCard({ providerId, provider, stats, authType, onToggle }) {
 
 ProviderCard.propTypes = {
   providerId: PropTypes.string.isRequired,
+  refreshKey: PropTypes.number,
   provider: PropTypes.shape({
     id: PropTypes.string.isRequired,
     name: PropTypes.string.isRequired,

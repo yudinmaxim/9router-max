@@ -26,7 +26,7 @@ const STATUS_VIEW = {
   verifying: { variant: "default", label: "Checking…" },
 };
 
-export default function AcpStatusBadge({ providerId }) {
+export default function AcpStatusBadge({ providerId, refreshKey = 0 }) {
   const [entry, setEntry] = useState(null);
   const [loading, setLoading] = useState(true);
   const [probing, setProbing] = useState(false);
@@ -94,7 +94,7 @@ export default function AcpStatusBadge({ providerId }) {
     fetchStatus();
     pollRef.current = setInterval(fetchStatus, POLL_MS);
     return () => clearInterval(pollRef.current);
-  }, [fetchStatus]);
+  }, [fetchStatus, refreshKey]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -189,4 +189,7 @@ export default function AcpStatusBadge({ providerId }) {
 
 AcpStatusBadge.propTypes = {
   providerId: PropTypes.string.isRequired,
+  // Bumped by the page when a fresh measurement was just triggered, so every
+  // badge re-reads immediately instead of waiting out its poll interval.
+  refreshKey: PropTypes.number,
 };
