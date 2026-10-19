@@ -15,16 +15,30 @@
 
 import { create } from "zustand";
 import { QUOTA_HEADER_CONFIG } from "@/shared/constants/config";
-import { pickHeaderQuotas } from "@/shared/utils/quota";
+import { pickHeaderQuotas, selectHeaderChips } from "@/shared/utils/quota";
 
 let pollTimer = null;
 let inFlight = null;
 
 async function loadChips() {
   const listRes = await fetch("/api/providers/client?pageSize=500");
-  if (!listRes.ok) return [];
+  if (!listRes.ok) return { chips: [], pins: [] };
   const listBody = await listRes.json();
   const connections = Array.isArray(listBody?.connections) ? listBody.connections : [];
+
+  // Connections the operator asked to keep in the header, whatever else the
+  // strip has room for. That is a personal choice, not a measurement, so it is
+  // read from the settings rather than guessed from the numbers.
+  let pinnedIds = [];
+  try {
+    const settingsRes = await fetch("/api/settings", { cache: "no-store" });
+    if (settingsRes.ok) {
+      const settings = await settingsRes.json();
+      if (Array.isArray(settings?.quotaHeaderPins)) pinnedIds = settings.quotaHeaderPins;
+    }
+  } catch {
+    /* no pins — the automatic choice stands */
+  }
 
   // One account per provider is enough for a header strip; a second Cursor login
   // would just repeat the first chip. Sorted so the visible subset is stable
@@ -51,6 +65,8 @@ async function loadChips() {
           // collide on the same React key.
           id: `${connection.id}:${quota.label}`,
           provider,
+          connectionId: connection.id,
+          pinned: pinnedIds.includes(connection.id),
           label: connection.displayName || connection.name || providerLabel(provider),
           quota,
         }));
@@ -60,7 +76,18 @@ async function loadChips() {
     })
   )).flat();
 
-  return chips.sort((a, b) => a.quota.remaining - b.quota.remaining);
+  const sorted = chips.sort((a, b) => {
+    // Pinned chips come first: the operator asked for that account to be in
+    // the header, so it does not get pushed out by a scale that merely looks
+    // closer to running out.
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    return a.quota.remaining - b.quota.remaining;
+  });
+
+  // The pins come from the settings, not from the chips: a pinned account whose
+  // usage query failed has no chip this round, and its checkbox must still say
+  // "always" rather than quietly untick itself.
+  return { chips: sorted, pins: pinnedIds };
 }
 
 function providerLabel(provider) {
@@ -73,10 +100,35 @@ export const useQuotaStore = create((set, get) => ({
   lastFetched: 0,
   visible: false,
   overflow: 0,
+  // Connection ids the operator pinned into the header.
+  pins: [],
 
   setVisible: (visible) => {
     if (visible) set({ visible: true });
     else set({ visible: false, chips: [], overflow: 0 });
+  },
+
+  /**
+   * Pin a connection into the header, or let it go back to the automatic
+   * choice. The choice is stored on the router, so it follows the operator to
+   * another browser, and the chips are rebuilt straight away.
+   */
+  setPinned: async (connectionId, pinned) => {
+    const current = get().pins;
+    const next = pinned
+      ? [...new Set([...current, connectionId])]
+      : current.filter((id) => id !== connectionId);
+    set({ pins: next });
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quotaHeaderPins: next }),
+      });
+    } catch {
+      /* the header keeps the choice for this session */
+    }
+    await get().refresh({ force: true });
   },
 
   refresh: async ({ force = false } = {}) => {
@@ -89,10 +141,14 @@ export const useQuotaStore = create((set, get) => ({
     set({ loading: true });
     inFlight = (async () => {
       try {
-        const all = await loadChips();
+        const { chips: all, pins } = await loadChips();
+        // A pinned chip is always shown, even when the strip is full: that is
+        // what "always" means. The rest fill what is left.
+        const { shown, overflow } = selectHeaderChips(all, QUOTA_HEADER_CONFIG.maxChips);
         set({
-          chips: all.slice(0, QUOTA_HEADER_CONFIG.maxChips),
-          overflow: Math.max(0, all.length - QUOTA_HEADER_CONFIG.maxChips),
+          chips: shown,
+          overflow,
+          pins,
           lastFetched: Date.now(),
         });
       } catch {

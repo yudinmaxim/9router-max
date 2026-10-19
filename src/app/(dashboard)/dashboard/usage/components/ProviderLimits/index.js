@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import QuotaWidget from "./QuotaWidget";
+import HeaderPinToggle from "./HeaderPinToggle";
 import Toggle from "@/shared/components/Toggle";
 import Tooltip from "@/shared/components/Tooltip";
 import { translate } from "@/i18n/runtime";
@@ -1297,6 +1298,7 @@ export default function ProviderLimits() {
                         </button>
                       </Tooltip>
                     )}
+                    <HeaderPinToggle connectionId={conn.id} />
                     <Tooltip text="Refresh quota">
                       <button
                         type="button"

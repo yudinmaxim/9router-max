@@ -54,6 +54,14 @@ function Chip({ chip }) {
         <span className="whitespace-nowrap tabular-nums font-medium">
           {quota.spent}% <span className="text-text-muted">→</span> {quota.remaining}%
         </span>
+        {/* A pinned chip is here because the operator asked for it, not because
+            it looked tightest. The pin says so, so a chip sitting above a
+            tighter one does not read as a mis-measurement. */}
+        {chip.pinned && (
+          <span className="material-symbols-outlined text-[13px] opacity-70" title="Always shown">
+            push_pin
+          </span>
+        )}
       </div>
     </Tooltip>
   );

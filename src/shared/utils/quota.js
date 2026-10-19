@@ -167,6 +167,29 @@ function clampPercent(value) {
 }
 
 /**
+ * Which chips the header strip has room for.
+ *
+ * A pinned chip is always shown, even when the strip is full — that is what
+ * "always" means. The rest fill what is left, tightest first.
+ *
+ * @param {Array<{pinned?: boolean}>} chips
+ * @param {number} maxChips
+ */
+export function selectHeaderChips(chips, maxChips) {
+  const all = Array.isArray(chips) ? chips : [];
+  // Pinned first, then the tightest scale. The order is decided here rather
+  // than by the caller, so the rule holds wherever the list came from.
+  const ordered = [...all].sort((a, b) => {
+    if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+    return (a.quota?.remaining ?? 0) - (b.quota?.remaining ?? 0);
+  });
+  const pinnedCount = ordered.filter((c) => c.pinned).length;
+  const limit = Math.max(maxChips, pinnedCount);
+  const shown = ordered.slice(0, limit);
+  return { shown, overflow: Math.max(0, ordered.length - shown.length) };
+}
+
+/**
  * Tailwind color classes for a remaining-percentage, in one place.
  *
  * The map was written out three times — `QuotaTable.js`, `QuotaProgressBar.js`
