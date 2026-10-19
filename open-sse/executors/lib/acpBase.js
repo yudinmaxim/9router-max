@@ -794,7 +794,7 @@ export class AcpAgentExecutor extends BaseExecutor {
                   ...(Array.isArray(mcpProxyTargets) ? mcpProxyTargets : []),
                 ],
               });
-              continue;
+              return;
             }
 
             // ── session/new response → sessionId + model catalog ──────────
@@ -838,7 +838,7 @@ export class AcpAgentExecutor extends BaseExecutor {
               // wins over whatever the agent had selected. `model` is excluded:
               // it is decided below, from this request.
               for (const [configId, value] of Object.entries(sessionDefaults)) {
-                if (configId === "model" || typeof value !== "string" || !value) continue;
+                if (configId === "model" || typeof value !== "string" || !value) return;
                 pendingConfigSets.push({ configId, value });
               }
 
@@ -849,7 +849,7 @@ export class AcpAgentExecutor extends BaseExecutor {
               // goes out immediately.
               if (pendingConfigSets.length) sendNextConfigOption();
               else startPrompt();
-              continue;
+              return;
             }
 
             // ── session/set_config_option response → next option, then prompt ─
@@ -859,7 +859,7 @@ export class AcpAgentExecutor extends BaseExecutor {
               } else {
                 startPrompt();
               }
-              continue;
+              return;
             }
 
             // ── session/prompt response (final result) ───────────────────
@@ -926,7 +926,7 @@ export class AcpAgentExecutor extends BaseExecutor {
                   result: { outcome: { outcome: "cancelled" } },
                 });
               }
-              continue;
+              return;
             }
 
             // ── client channel we genuinely do not implement ───────────────
@@ -937,7 +937,7 @@ export class AcpAgentExecutor extends BaseExecutor {
             // do not (see the initialize handshake above).
             if (msg.method && msg.id !== undefined && msg.id !== null) {
               log?.debug?.(tag, `unanswered client request: ${msg.method}`);
-              continue;
+              return;
             }
 
             // ── session/update notifications ─────────────────────────────
@@ -979,7 +979,7 @@ export class AcpAgentExecutor extends BaseExecutor {
                     // permission request above was denied. Do not hand the
                     // client a tool_call the agent is not going to make.
                     pendingClientTools.delete(tcId);
-                    continue;
+                    return;
                   }
                   if (origName && update.rawInput) {
                     pendingClientTools.delete(tcId);
@@ -988,7 +988,7 @@ export class AcpAgentExecutor extends BaseExecutor {
                     finish(null, "tool_calls");
                     return;
                   }
-                  continue;
+                  return;
                 }
 
                 // The agent runs its own tools against its own sandbox — these
@@ -1001,7 +1001,7 @@ export class AcpAgentExecutor extends BaseExecutor {
               } else if (type === "session_info_update") {
                 log?.debug?.(tag, `title: ${update.title || ""}`);
               }
-              continue;
+              return;
             }
 
             // ── error responses ──────────────────────────────────────────
