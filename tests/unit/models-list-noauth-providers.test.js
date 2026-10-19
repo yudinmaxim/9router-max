@@ -59,13 +59,13 @@ describe("/v1/models — noAuth providers without a connection row", () => {
 
   it("publishes them under their alias, not their internal id", async () => {
     const ids = (await buildModelsList(["llm"])).map((m) => m.id);
-    expect(ids).toContain("oacp/space-bunny-free");
+    expect(ids).toContain("oacp/minimax-m3.1-flash-free");
     expect(ids).toContain("ca/composer-2.5");
     expect(ids).toContain("dv/swe-1.6");
     // Clients address providers by alias everywhere else in the router; the
     // internal id is an implementation detail and must not leak into the list.
     expect(ids).not.toContain("cursor-acp/composer-2.5");
-    expect(ids).not.toContain("opencode-acp/space-bunny-free");
+    expect(ids).not.toContain("opencode-acp/minimax-m3.1-flash-free");
   });
 
   it("still honours a real connection's explicit model list", async () => {

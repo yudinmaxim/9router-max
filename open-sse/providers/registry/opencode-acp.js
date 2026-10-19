@@ -56,19 +56,26 @@ export default {
     forceStream: true,
     noAuth: true,
   },
+  // Verified against the agent on 2026-10-19: every id below answered a
+  // request through the router. The list used to carry models Zen has since
+  // retired — space-bunny-free among them, which the gateway now answers with
+  // "ModelDeprecated" — so the published catalog pointed at models that could
+  // not be served, and a client's default model failed on its first request.
+  //
+  // This is a snapshot and it will go stale again: the agent's own catalog
+  // moves. `passthroughModels` keeps unknown ids routable, so a model that
+  // appears upstream works before this list catches up — it just is not
+  // discoverable in /v1/models until it is listed here.
   models: [
     { id: "default", name: "Auto (OpenCode Picks)" },
+    { id: "beam-free", name: "Beam Free" },
     { id: "big-pickle", name: "Big Pickle" },
-    { id: "exo-free", name: "Exo Free" },
-    { id: "ling-3.0-flash-fin-free", name: "Ling 3.0 Flash Fin Free" },
-    { id: "ling-3.1-flash-free", name: "Ling 3.1 Flash Free" },
     { id: "longcat-2.5-preview-free", name: "LongCat 2.5 Preview Free" },
     { id: "mimo-v2.6-flash-free", name: "MiMo-V2.6-Flash Free" },
-    { id: "muse-spark-1.3-contributor-free", name: "Muse Spark 1.3 Free" },
+    { id: "minimax-m3.1-flash-free", name: "MiniMax M3.1 Flash Free" },
     { id: "nemotron-3-ultra-free", name: "Nemotron 3 Ultra Free" },
     { id: "nemotron-3.5-lightning-free", name: "Nemotron 3.5 Lightning Free" },
-    { id: "space-bunny-free", name: "Space Bunny Free" },
-    { id: "step-5-preview-free", name: "Step 5 Preview Free" },
+    { id: "nemotron-3.5-super-vl-free", name: "Nemotron 3.5 Super VL Free" },
   ],
   passthroughModels: true,
 };
