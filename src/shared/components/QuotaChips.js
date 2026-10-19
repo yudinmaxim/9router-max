@@ -47,9 +47,11 @@ function Chip({ chip }) {
             the name drops and the numbers stay, because a chip that disappears
             on a narrow window is worse than a chip without a caption. `.lg\:flex`
             sits inside `@media (min-width:64rem)`, so gating the whole chip on it
-            hid the feature outright at 1023px. */}
+            hid the feature outright at 1023px.
+            Two accounts of one provider need the other half of the story: the
+            scale says which window, the account says whose. */}
         <span className="hidden max-w-[92px] truncate text-text-secondary lg:inline">
-          {quota.label}
+          {chip.showAccount ? chip.account : quota.label}
         </span>
         <span className="whitespace-nowrap tabular-nums font-medium">
           {quota.spent}% <span className="text-text-muted">→</span> {quota.remaining}%

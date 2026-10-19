@@ -15,7 +15,12 @@
 
 import { create } from "zustand";
 import { QUOTA_HEADER_CONFIG } from "@/shared/constants/config";
-import { pickHeaderQuotas, selectHeaderChips } from "@/shared/utils/quota";
+import {
+  pickHeaderQuotas,
+  selectHeaderChips,
+  chooseHeaderConnections,
+  shortAccountLabel,
+} from "@/shared/utils/quota";
 
 let pollTimer = null;
 let inFlight = null;
@@ -40,20 +45,21 @@ async function loadChips() {
     /* no pins — the automatic choice stands */
   }
 
-  // One account per provider is enough for a header strip; a second Cursor login
-  // would just repeat the first chip. Sorted so the visible subset is stable
-  // across polls and does not shuffle under the cursor.
-  const byProvider = new Map();
-  for (const c of connections) {
-    if (c?.isActive === false) continue;
-    if (!byProvider.has(c.provider)) byProvider.set(c.provider, c);
-  }
+  // Which connections earn a chip. A provider normally contributes one — a
+  // second Cursor login would just repeat the first chip. But a pinned
+  // connection is the operator's own choice and always contributes its own
+  // chip: pin one of two Codex accounts and that account is the Codex chip;
+  // pin both and the header carries both. A provider with a pinned connection
+  // no longer contributes an automatic one, or the operator would see the
+  // account they did not ask for next to the one they did.
+  const toFetch = chooseHeaderConnections(connections, pinnedIds);
 
   // One entry per scale, not per connection. Cursor measures its own models and
   // everything else against separate allowances, so collapsing them into one chip
   // would produce a number that belongs to no scale at all.
   const chips = (await Promise.all(
-    [...byProvider.entries()].map(async ([provider, connection]) => {
+    toFetch.map(async (connection) => {
+      const provider = connection.provider;
       try {
         const res = await fetch(`/api/usage/${connection.id}`);
         if (!res.ok) return [];
@@ -68,6 +74,7 @@ async function loadChips() {
           connectionId: connection.id,
           pinned: pinnedIds.includes(connection.id),
           label: connection.displayName || connection.name || providerLabel(provider),
+          account: shortAccountLabel(connection),
           quota,
         }));
       } catch {
@@ -145,8 +152,16 @@ export const useQuotaStore = create((set, get) => ({
         // A pinned chip is always shown, even when the strip is full: that is
         // what "always" means. The rest fill what is left.
         const { shown, overflow } = selectHeaderChips(all, QUOTA_HEADER_CONFIG.maxChips);
+        // When a provider contributes more than one chip — two Codex accounts,
+        // say — the scale name is not enough to tell them apart, so the chip
+        // names the account instead.
+        const perProvider = new Map();
+        for (const c of shown) perProvider.set(c.provider, (perProvider.get(c.provider) || 0) + 1);
         set({
-          chips: shown,
+          chips: shown.map((c) => ({
+            ...c,
+            showAccount: (perProvider.get(c.provider) || 0) > 1,
+          })),
           overflow,
           pins,
           lastFetched: Date.now(),

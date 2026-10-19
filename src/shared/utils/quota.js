@@ -167,6 +167,64 @@ function clampPercent(value) {
 }
 
 /**
+ * A short name for the account behind a connection.
+ *
+ * Two accounts of the same provider are two different widgets, so the header
+ * has to say which is which. Connection names come in shapes like
+ * "[Екатерина] sigma.mipt@outlook.com" — the bracketed part identifies the
+ * person, which is exactly the part worth showing; the mail domain is not.
+ */
+function providerLabel(provider) {
+  return String(provider || "").replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+export function shortAccountLabel(connection) {
+  const name = String(connection?.name || "").trim();
+  const bracketed = name.match(/^\[([^\]]+)\]/);
+  if (bracketed) return bracketed[1];
+  // A name that is itself a mail address says the same thing as the mail
+  // field: the domain is noise inside a chip.
+  const email = String(connection?.email || "").trim();
+  if (email.includes("@")) return email.split("@")[0];
+  if (name.includes("@")) return name.split("@")[0];
+  return name || providerLabel(connection?.provider);
+}
+
+/**
+ * Which connections earn a chip in the header.
+ *
+ * A provider normally contributes one chip — a second login of the same
+ * provider would just repeat it. But a pinned connection is the operator's own
+ * choice, so it always contributes its own chip: pin one of two Codex accounts
+ * and that account is the Codex chip; pin both and the header carries both.
+ *
+ * A provider with a pinned connection contributes no automatic one, or the
+ * operator would see the account they did not ask for next to the one they did.
+ *
+ * @param {Array<{id:string,provider:string,isActive?:boolean}>} connections
+ * @param {string[]} pinnedIds
+ */
+export function chooseHeaderConnections(connections, pinnedIds) {
+  const all = Array.isArray(connections) ? connections : [];
+  const pins = Array.isArray(pinnedIds) ? pinnedIds : [];
+  const pinned = all.filter((c) => pins.includes(c.id));
+  const providersWithPin = new Set(pinned.map((c) => c.provider));
+
+  const chosen = new Map();
+  for (const c of pinned) chosen.set(c.id, c);
+
+  const seenProviders = new Set();
+  for (const c of all) {
+    if (c?.isActive === false) continue;
+    if (providersWithPin.has(c.provider)) continue;
+    if (seenProviders.has(c.provider)) continue;
+    seenProviders.add(c.provider);
+    chosen.set(c.id, c);
+  }
+  return [...chosen.values()];
+}
+
+/**
  * Which chips the header strip has room for.
  *
  * A pinned chip is always shown, even when the strip is full — that is what
