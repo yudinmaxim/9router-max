@@ -91,7 +91,10 @@ export function resolveInstalledBin(spec) {
   // adapter is what gets spawned, so that's what "installed" means for it.
   if (spec.adapter) return resolveAcpAdapterBin(spec.adapter);
 
-  const resolved = resolveAgentBin(spec);
+  // An executor that resolves its own binary (devin installs to its own
+  // layout) is the authority on where it lives — asking anything else would
+  // report a binary the router cannot actually spawn.
+  const resolved = spec.resolveBin ? spec.resolveBin() : resolveAgentBin(spec);
   try {
     if (fs.statSync(resolved).isFile()) return resolved;
   } catch {

@@ -15,6 +15,11 @@ export default {
     },
   },
   category: "free",
+  // Runs a local binary over ACP and holds no credential row, so there is no
+  // connection state to read — availability has to be measured instead. The
+  // providers page keys its honest status badge off this flag; without it
+  // Devin fell through to the unconditional "Ready" it never earned.
+  localAgent: true,
   // Without this the provider is absent from USAGE_SUPPORTED_PROVIDERS,
   // so /api/providers/client filtered its connection out of the usage
   // page — the agent was serving traffic while showing nothing there.

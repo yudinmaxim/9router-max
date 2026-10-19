@@ -38,6 +38,9 @@ export default {
     },
   },
   category: "free",
+  // Runs a local binary over ACP and holds no credential row: its availability
+  // is measured (see lib/acpStatus.js), never assumed.
+  localAgent: true,
   // Without this the provider is absent from USAGE_SUPPORTED_PROVIDERS,
   // so /api/providers/client filtered its connection out of the usage
   // page — the agent was serving traffic while showing nothing there.

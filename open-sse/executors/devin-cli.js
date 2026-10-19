@@ -86,6 +86,25 @@ const DEVIN_CLIENT_TOOL_PREFIX = "mcp_";
 export class DevinCliExecutor extends BaseExecutor {
   constructor() {
     super("devin-cli", { id: "devin-cli", baseUrl: "devin://acp/stdio" });
+    // Devin speaks the same Agent Client Protocol the `*-acp` executors use
+    // (devin://acp/stdio, `devin acp` on stdio), but predates the shared ACP
+    // base class and keeps its own executor for the client-tools bridge and
+    // the agent-type switch. Publishing the spec here is what lets the shared
+    // status machinery measure it like the others: without it the providers
+    // page had nothing to check and fell back to an unconditional green "Ready"
+    // for a CLI that was never installed.
+    this.acp = {
+      exe: process.platform === "win32" ? "devin.exe" : "devin",
+      args: ["acp"],
+      envVar: "CLI_DEVIN_BIN",
+      label: "Devin",
+      errorType: "devin_cli_error",
+      installHint:
+        "Install with `curl -fsSL https://cli.devin.ai/install.sh | bash` and run `devin auth login`",
+      // Devin's installer layout differs from the shared agent lookup, so it
+      // keeps resolving its own binary.
+      resolveBin: resolveDevinBin,
+    };
   }
 
   buildUrl() {

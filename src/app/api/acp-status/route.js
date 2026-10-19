@@ -8,10 +8,11 @@ export const dynamic = "force-dynamic";
 // npm install of an adapter is a real install, not a cache read.
 export const maxDuration = 300;
 
-// Every provider the ACP executor actually serves, same filter the ACP
-// permissions page uses — so a newly registered -acp provider is covered
-// without touching this file.
-const ACP_PROVIDERS = Object.keys(PROVIDERS).filter((id) => id.endsWith("-acp")).sort();
+// Every provider that runs a local agent process. Keyed off the executor's own
+// spec rather than an id suffix: devin-cli speaks the same protocol but keeps
+// its own executor, and a suffix check silently excluded it — which is how it
+// ended up with a badge nothing ever updates.
+const ACP_PROVIDERS = Object.keys(PROVIDERS).filter((id) => Boolean(specFor(id))).sort();
 
 function specFor(id) {
   return getExecutor(id)?.acp;

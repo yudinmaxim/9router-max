@@ -4,9 +4,10 @@ import { useState, useEffect, useCallback } from "react";
 import { Card, Button, Select, Toggle } from "@/shared/components";
 import { PROVIDERS } from "open-sse/config/providers.js";
 
-// Every provider the ACP executor actually serves. Listing only the ones that
-// already have an override would make a new provider unselectable.
-const ACP_PROVIDERS = Object.keys(PROVIDERS).filter((id) => id.endsWith("-acp")).sort();
+// Every provider that spawns a local agent over ACP. Keyed off the registry's
+// `localAgent` flag, not an id suffix — devin-cli drives a local agent too, and
+// a suffix filter left it off the list its own permissions apply to.
+const ACP_PROVIDERS = Object.keys(PROVIDERS).filter((id) => PROVIDERS[id].localAgent).sort();
 
 const ACTIONS = ["read", "search", "edit", "move", "delete", "execute", "fetch", "other"];
 const VALUES = ["always", "once", "deny"];

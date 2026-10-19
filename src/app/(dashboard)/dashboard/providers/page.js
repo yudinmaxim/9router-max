@@ -697,10 +697,11 @@ export default function ProvidersPage() {
 function ProviderCard({ providerId, provider, stats, authType, onToggle }) {
   const { connected, error, errorCode, errorTime, allDisabled } = stats;
   const isNoAuth = !!provider.noAuth;
-  // ACP agents run a local CLI rather than holding a credential, so they have
-  // no connection row to read a status from. Their badge is measured by an
-  // actual probe instead of assumed ready (see components/AcpStatusBadge).
-  const isAcpProvider = provider.id.endsWith("-acp");
+  // Providers that run a local binary hold no credential, so there is no
+  // connection state to read — their availability is measured instead. Without
+  // this they fell through to a hardcoded "Ready", which is how an uninstalled
+  // Devin CLI kept showing green.
+  const isLocalAgent = !!provider.localAgent;
 
   const dotColors = {
     free: "bg-green-500",
@@ -752,9 +753,13 @@ function ProviderCard({ providerId, provider, stats, authType, onToggle }) {
                       Disabled
                     </span>
                   </Badge>
-                ) : isAcpProvider ? (
+                ) : isLocalAgent ? (
                   <AcpStatusBadge providerId={provider.id} />
                 ) : isNoAuth ? (
+                  // A noAuth *service* — no credential to add and nothing
+                  // spawned locally, so it is available by definition. Only
+                  // local agents get a measured badge above, because only those
+                  // have a binary that may simply not be installed.
                   <Badge variant="success" size="sm" dot>Ready</Badge>
                 ) : (
                   <>

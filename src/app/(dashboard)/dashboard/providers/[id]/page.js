@@ -42,9 +42,11 @@ export default function ProviderDetailPage() {
   const params = useParams();
   const router = useRouter();
   const providerId = params.id;
-  // Only these providers spawn a local CLI agent over ACP, and only a spawned
-  // agent can ask the router to approve an action on the machine.
-  const isAcpProvider = providerId.endsWith("-acp");
+  // Providers that spawn a local agent: only those can ask the router to
+  // approve an action on the machine, and only those have an availability to
+  // measure. devin-cli qualifies — it speaks ACP from its own binary but never
+  // carried the `-acp` suffix, so a suffix test silently skipped it.
+  const isLocalAgent = !!FREE_PROVIDERS[providerId]?.localAgent;
   const { getCaps } = useModelCaps();
   const [connections, setConnections] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1754,12 +1756,12 @@ export default function ProviderDetailPage() {
 
       {/* Tool permissions for CLI agents driven over ACP. Only these providers
           spawn a local agent that can act on the machine, so only they ask. */}
-      {isAcpProvider && <AcpPermissionsCard providerId={providerId} />}
+      {isLocalAgent && <AcpPermissionsCard providerId={providerId} />}
 
       {/* Agent setup: which of the agent's own models to publish, and the
           options pinned on every session. Replaces the "nothing to configure"
           dead end a noAuth provider used to end at. */}
-      {isAcpProvider && <AcpAgentCard providerId={providerId} />}
+      {isLocalAgent && <AcpAgentCard providerId={providerId} />}
 
       {/* Models */}
       <Card>

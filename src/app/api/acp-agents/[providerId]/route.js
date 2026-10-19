@@ -12,7 +12,9 @@ import {
 export const dynamic = "force-dynamic";
 
 function isAcpProvider(providerId) {
-  return Boolean(PROVIDERS[providerId]) && providerId.endsWith("-acp");
+  // An executor that publishes a local-agent spec is the authority — devin-cli
+  // qualifies without carrying the `-acp` suffix.
+  return Boolean(PROVIDERS[providerId]) && Boolean(getExecutor(providerId)?.acp);
 }
 
 /** GET /api/acp-agents/<id> — current choices plus the catalog they refer to. */

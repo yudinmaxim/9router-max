@@ -30,6 +30,11 @@ function buildProviderEntry(r) {
     ...(r.regions ? { regions: r.regions, defaultRegion: r.defaultRegion } : {}),
     ...(r.hasProviderSpecificData ? { hasProviderSpecificData: true } : {}),
     ...(r.noAuth ? { noAuth: true } : {}),
+    // Runs a local binary instead of holding a credential: its status has to be
+    // measured, so the providers page shows a real badge rather than a hardcoded
+    // "Ready". Passed through as plain data because this module is imported by
+    // client components, which must not pull in the executors.
+    ...(r.localAgent ? { localAgent: true } : {}),
     ...(r.passthroughModels ? { passthroughModels: true } : {}),
     ...(r.hasOAuth ? { hasOAuth: true } : {}),
     ...(r.authModes ? { authModes: r.authModes } : {}),

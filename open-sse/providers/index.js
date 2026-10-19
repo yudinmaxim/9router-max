@@ -35,6 +35,10 @@ for (const entry of REGISTRY) {
   if (entry.transport) {
     PROVIDERS[entry.id] = buildTransport(entry.transport, entry.oauth);
     if (entry.transports) PROVIDERS[entry.id].transports = entry.transports;
+    // Runs a local agent binary instead of holding a credential. Carried here so
+    // consumers can tell "has a connection state" from "must be measured"
+    // without reaching into the registry or the executors.
+    if (entry.localAgent) PROVIDERS[entry.id].localAgent = true;
   }
   if (entry.models !== undefined) PROVIDER_MODELS[entry.alias || entry.id] = entry.models.map(normalizeModel);
   if (entry.oauth) PROVIDER_OAUTH[entry.id] = entry.oauth;

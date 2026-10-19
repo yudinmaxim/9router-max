@@ -9,7 +9,9 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 function isAcpProvider(providerId) {
-  return Boolean(PROVIDERS[providerId]) && providerId.endsWith("-acp");
+  // An executor that publishes a local-agent spec is the authority — devin-cli
+  // qualifies without carrying the `-acp` suffix.
+  return Boolean(PROVIDERS[providerId]) && Boolean(getExecutor(providerId)?.acp);
 }
 
 /**
