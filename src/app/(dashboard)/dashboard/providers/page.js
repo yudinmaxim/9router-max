@@ -25,6 +25,12 @@ import { useNotificationStore } from "@/store/notificationStore";
 import { useHeaderSearchStore } from "@/store/headerSearchStore";
 import ModelAvailabilityBadge from "./components/ModelAvailabilityBadge";
 import AcpStatusBadge from "./components/AcpStatusBadge";
+import { useProvidersVisibility } from "./components/providersVisibility";
+import {
+  SectionVisibilityBar,
+  VisibilityTreeMenu,
+  HideProviderButton,
+} from "./components/VisibilityControls";
 import AddCompatibleModal from "./components/AddCompatibleModal";
 import { STATUS_FILTER_OPTIONS, matchesStatusFilter } from "./utils";
 
@@ -108,6 +114,7 @@ export default function ProvidersPage() {
   const [testingMode, setTestingMode] = useState(null);
   const [checkingAgents, setCheckingAgents] = useState(false);
   const [agentRefreshKey, setAgentRefreshKey] = useState(0);
+  const visibility = useProvidersVisibility();
   const [testResults, setTestResults] = useState(null);
   const [statusFilter, setStatusFilter] = useState("all");
   const notify = useNotificationStore();
@@ -350,6 +357,7 @@ export default function ProvidersPage() {
   const freeEntries = freeProviderEntries
     .filter((entry) => !isLocalAgentEntry(entry))
     .sort(([, a], [, b]) => (b.noAuth ? 1 : 0) - (a.noAuth ? 1 : 0));
+
   // Free Tier cards may be oauth-only (e.g. kimchi) or dual-auth, so count via
   // dualAuthTypes per provider instead of a fixed "apikey" — otherwise oauth
   // connections are invisible here (mismatch with the detail page).
@@ -387,12 +395,41 @@ export default function ProvidersPage() {
       if (ca !== cb) return ca - cb;
       return (a.name || "").localeCompare(b.name || "");
     });
+  // Providers the operator parked out of sight. Applied after search and the
+  // status filter so hiding composes with them instead of fighting them.
+  const visible = (entries) => entries.filter(([key]) => !visibility.isProviderHidden(key));
+  const shownOauth = visible(oauthEntries);
+  const shownLocalAgents = visible(localAgentEntries);
+  const shownFree = visible(freeEntries);
+  const shownFreeTier = visible(freeTierEntries);
+  const shownApikey = visible(apikeyEntries);
+  const compatibilityEntries = [...compatibleProviders, ...anthropicCompatibleProviders].map((info) => [
+    info.id,
+    info,
+  ]);
+  const shownCompatible = visible(compatibilityEntries);
+
+  // One branch per section, one leaf per provider, built from the *unfiltered*
+  // lists — a hidden provider still needs a checkbox to bring it back.
+  const visibilityTree = [
+    { id: "localAgents", entries: localAgentEntries },
+    { id: "free", entries: [...freeEntries, ...freeTierEntries] },
+    { id: "oauth", entries: oauthEntries },
+    { id: "apikey", entries: apikeyEntries },
+    { id: "compatible", entries: compatibilityEntries },
+  ]
+    .map(({ id, entries }) => ({
+      id,
+      providers: entries.map(([key, info]) => ({ id: key, name: info.name })),
+    }))
+    .filter((section) => section.providers.length > 0);
+
   const isApikeySearching = !!searchQuery.trim() || statusFilter !== "all";
   const visibleApikeyEntries =
     isApikeySearching || showAllApikey
-      ? apikeyEntries
-      : apikeyEntries.slice(0, APIKEY_INITIAL_VISIBLE);
-  const hiddenApikeyCount = apikeyEntries.length - APIKEY_INITIAL_VISIBLE;
+      ? shownApikey
+      : shownApikey.slice(0, APIKEY_INITIAL_VISIBLE);
+  const hiddenApikeyCount = shownApikey.length - APIKEY_INITIAL_VISIBLE;
 
   if (loading) {
     return (
@@ -404,16 +441,23 @@ export default function ProvidersPage() {
   }
 
   const hasAnyResult =
-    oauthEntries.length > 0 ||
-    freeEntries.length > 0 ||
-    freeTierEntries.length > 0 ||
-    apikeyEntries.length > 0 ||
-    compatibleProviders.length > 0 ||
-    anthropicCompatibleProviders.length > 0;
+    shownOauth.length > 0 ||
+    shownFree.length > 0 ||
+    shownFreeTier.length > 0 ||
+    shownApikey.length > 0 ||
+    shownCompatible.length > 0;
 
   return (
     <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
-      <div className="flex items-center justify-end">
+      <div className="flex items-center justify-end gap-2">
+        <VisibilityTreeMenu
+          tree={visibilityTree}
+          isSectionHidden={visibility.isSectionHidden}
+          isProviderHidden={visibility.isProviderHidden}
+          onToggleSection={visibility.toggleSection}
+          onToggleProvider={visibility.toggleProvider}
+          onReset={visibility.reset}
+        />
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
@@ -472,6 +516,15 @@ export default function ProvidersPage() {
             <span>No custom providers — use buttons above to add OpenAI/Anthropic compatible endpoints</span>
           </div>
         ) : (
+<>
+        {visibility.isSectionHidden("compatible") && (
+          <SectionVisibilityBar
+            sectionId="compatible"
+            count={shownCompatible.length}
+            onShow={() => visibility.toggleSection("compatible")}
+          />
+        )}
+        {!visibility.isSectionHidden("compatible") && (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
             {[...compatibleProviders, ...anthropicCompatibleProviders].map(
               (info) => (
@@ -488,11 +541,13 @@ export default function ProvidersPage() {
               ),
             )}
           </div>
+      )}
+      </>
         )}
       </div>
 
       {/* OAuth Providers */}
-      {oauthEntries.length > 0 && (
+      {shownOauth.length > 0 && (
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2 leading-tight">
@@ -520,8 +575,17 @@ export default function ProvidersPage() {
             </button>
           </div>
         </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
-          {oauthEntries.map(([key, info]) => {
+        {visibility.isSectionHidden("oauth") && (
+          <SectionVisibilityBar
+            sectionId="oauth"
+            count={shownOauth.length}
+            onShow={() => visibility.toggleSection("oauth")}
+          />
+        )}
+        {!visibility.isSectionHidden("oauth") && (
+        (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
+          {shownOauth.map(([key, info]) => {
             const authTypes = dualAuthTypes(info, key);
             return (
               <ProviderCard
@@ -531,10 +595,13 @@ export default function ProvidersPage() {
                 stats={getProviderStats(key, authTypes)}
                 authType="oauth"
                 onToggle={(active) => handleToggleProvider(key, authTypes, active)}
+                onHide={visibility.toggleProvider}
               />
             );
           })}
         </div>
+        )
+        )}
       </div>
       )}
 
@@ -542,7 +609,7 @@ export default function ProvidersPage() {
           Separate from Free because nothing here is a hosted API: each one is
           an install on the user's disk, holding its own login, and its badge
           is measured rather than assumed. */}
-      {localAgentEntries.length > 0 && (
+      {shownLocalAgents.length > 0 && (
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2 leading-tight">
@@ -577,8 +644,17 @@ export default function ProvidersPage() {
           Each agent is a CLI you install yourself and sign in through directly. The badge shows whether
           it is actually answering — not merely present.
         </p>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
-          {localAgentEntries.map(([key, info]) => (
+        {visibility.isSectionHidden("localAgents") && (
+          <SectionVisibilityBar
+            sectionId="localAgents"
+            count={shownLocalAgents.length}
+            onShow={() => visibility.toggleSection("localAgents")}
+          />
+        )}
+        {!visibility.isSectionHidden("localAgents") && (
+        (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
+          {shownLocalAgents.map(([key, info]) => (
             <ProviderCard
               key={key}
               providerId={key}
@@ -587,14 +663,17 @@ export default function ProvidersPage() {
               authType="free"
               refreshKey={agentRefreshKey}
               onToggle={(active) => handleToggleProvider(key, dualAuthTypes(info, key), active)}
+              onHide={visibility.toggleProvider}
             />
           ))}
         </div>
+        )
+        )}
       </div>
       )}
 
       {/* Free Tier Providers */}
-      {(freeEntries.length > 0 || freeTierEntries.length > 0) && (
+      {(shownFree.length > 0 || shownFreeTier.length > 0) && (
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2 leading-tight">
@@ -619,8 +698,17 @@ export default function ProvidersPage() {
             {testingMode === "free" ? "Testing..." : "Test All"}
           </button>
         </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
-          {freeEntries.map(([key, info]) => {
+        {visibility.isSectionHidden("free") && (
+          <SectionVisibilityBar
+            sectionId="free"
+            count={shownFree.length + shownFreeTier.length}
+            onShow={() => visibility.toggleSection("free")}
+          />
+        )}
+        {!visibility.isSectionHidden("free") && (
+        (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
+          {shownFree.map(([key, info]) => {
             // Dual-auth (e.g. kiro): count/toggle oauth + apikey/api_key so the
             // card total matches the provider detail page.
             const freeAuthTypes = dualAuthTypes(info, key);
@@ -634,10 +722,11 @@ export default function ProvidersPage() {
                 onToggle={(active) =>
                   handleToggleProvider(key, freeAuthTypes, active)
                 }
+                onHide={visibility.toggleProvider}
               />
             );
           })}
-          {freeTierEntries.map(([key, info]) => {
+          {shownFreeTier.map(([key, info]) => {
             const freeAuthTypes = dualAuthTypes(info, key);
             return (
               <ApiKeyProviderCard
@@ -651,11 +740,13 @@ export default function ProvidersPage() {
             );
           })}
         </div>
+        )
+        )}
       </div>
       )}
 
       {/* API Key Providers — fixed list */}
-      {apikeyEntries.length > 0 && (
+      {shownApikey.length > 0 && (
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2 leading-tight">
@@ -680,7 +771,16 @@ export default function ProvidersPage() {
             {testingMode === "apikey" ? "Testing..." : "Test All"}
           </button>
         </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
+        {visibility.isSectionHidden("apikey") && (
+          <SectionVisibilityBar
+            sectionId="apikey"
+            count={shownApikey.length}
+            onShow={() => visibility.toggleSection("apikey")}
+          />
+        )}
+        {!visibility.isSectionHidden("apikey") && (
+        (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
           {visibleApikeyEntries.map(([key, info]) => (
             <ApiKeyProviderCard
               key={key}
@@ -692,6 +792,8 @@ export default function ProvidersPage() {
             />
           ))}
         </div>
+        )
+        )}
         {!isApikeySearching && !showAllApikey && hiddenApikeyCount > 0 && (
           <button
             onClick={() => setShowAllApikey(true)}
@@ -775,7 +877,7 @@ export default function ProvidersPage() {
   );
 }
 
-function ProviderCard({ providerId, provider, stats, authType, onToggle, refreshKey = 0 }) {
+function ProviderCard({ providerId, provider, stats, authType, onToggle, refreshKey = 0, onHide }) {
   const { connected, error, errorCode, errorTime, allDisabled } = stats;
   const isNoAuth = !!provider.noAuth;
   // Providers that run a local binary hold no credential, so there is no
@@ -798,7 +900,13 @@ function ProviderCard({ providerId, provider, stats, authType, onToggle, refresh
   };
 
   return (
-    <Link href={`/dashboard/providers/${providerId}`} className="group min-w-0">
+    <div className="relative group min-w-0">
+      {/* Outside the link on purpose: a button inside an anchor is invalid HTML,
+          and here every hide would also navigate to the provider. */}
+      {onHide && (
+        <HideProviderButton providerId={providerId} name={provider.name} onHide={onHide} />
+      )}
+      <Link href={`/dashboard/providers/${providerId}`} className="group block h-full min-w-0">
       <Card
         padding="xs"
         className={`h-full hover:bg-black/[0.01] dark:hover:bg-white/[0.01] transition-colors cursor-pointer ${allDisabled ? "opacity-50" : ""}`}
@@ -874,7 +982,8 @@ function ProviderCard({ providerId, provider, stats, authType, onToggle, refresh
           </div>
         </div>
       </Card>
-    </Link>
+      </Link>
+    </div>
   );
 }
 
