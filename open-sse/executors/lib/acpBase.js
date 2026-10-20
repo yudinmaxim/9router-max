@@ -420,7 +420,7 @@ export class AcpAgentExecutor extends BaseExecutor {
     return false;
   }
 
-  async execute({ model, body, credentials, acpPermissions, acpSessionDefaults, mcpProxyTargets, signal, log }) {
+  async execute({ model, body, credentials, acpPermissions, acpSessionDefaults, mcpProxyTargets, proxyOptions = null, signal, log }) {
     const { exe, envVar, args, tag, label, installHint, errorType, versionsDir, extraDirs } = this.acp;
     const b = body ?? {};
     const contextWindow = getCapabilitiesForModel(this.providerId, model).contextWindow || 200000;
@@ -437,6 +437,12 @@ export class AcpAgentExecutor extends BaseExecutor {
     // its own entries (CODEX_PATH and friends); those still merge over the
     // inherited set rather than replacing it.
     const env = { ...process.env, ...(this.acp.env?.() || this.acp.env || {}) };
+    if (proxyOptions?.connectionProxyEnabled && proxyOptions.connectionProxyUrl) {
+      env.HTTP_PROXY = proxyOptions.connectionProxyUrl;
+      env.HTTPS_PROXY = proxyOptions.connectionProxyUrl;
+      env.ALL_PROXY = proxyOptions.connectionProxyUrl;
+      if (proxyOptions.connectionNoProxy) env.NO_PROXY = proxyOptions.connectionNoProxy;
+    }
     // Agents whose CLI has no ACP subcommand spawn a bridge instead (see
     // acpAdapter.js), which may need installing on this machine the first time.
     const bin = this.acp.adapter
