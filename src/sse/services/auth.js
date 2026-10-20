@@ -216,7 +216,19 @@ return {
       connection = availableConnections[0];
     }
 
-    const resolvedProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});
+    // ACP connections use provider-level proxy strategy too. A configured pool
+    // must be selected per request, otherwise persistent ACP children stay on
+    // one pool forever and rotation never reaches the agent process.
+    let proxyData = connection.providerSpecificData || {};
+    const acpProvider = providerId.endsWith("-acp") || providerId === "devin-cli" || providerId === "omp-acp";
+    const proxyStrategy = providerOverride.proxyRotateStrategy || providerOverride.rotateStrategy || "none";
+    if (acpProvider && proxyStrategy !== "none") {
+      const pools = await getProxyPools({ isActive: true });
+      const poolIds = pools.filter((pool) => pool.proxyUrl).map((pool) => pool.id);
+      const selectedPoolId = pickProxyPoolId(poolIds, proxyStrategy, providerId);
+      if (selectedPoolId) proxyData = { ...proxyData, proxyPoolId: selectedPoolId };
+    }
+    const resolvedProxy = await resolveConnectionProxyConfig(proxyData);
 
     return {
       authType: connection.authType,

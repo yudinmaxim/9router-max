@@ -840,8 +840,11 @@ export class AcpAgentExecutor extends BaseExecutor {
                 return;
               }
               sessionId = res.sessionId || (resumeAttempted ? prior?.sessionId : null);
+              // ACP agents may emit an unrelated response/update while session
+              // initialization is still completing. Ignore result frames that do
+              // not carry session state; only an explicit error ends the flow.
               if (!sessionId) {
-                finish(`ACP: ${resumeAttempted ? "session/resume" : "session/new"} returned no sessionId`);
+                if (msg.error) finish(`ACP: ${resumeAttempted ? "session/resume" : "session/new"} failed: ${msg.error.message || "unknown error"}`);
                 return;
               }
               sessionCreated = true;
