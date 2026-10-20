@@ -21,6 +21,7 @@ import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
 import { getAllAcpAgentSettings } from "@/lib/acpAgents";
+import { readCachedCatalog } from "open-sse/executors/lib/acpCatalog.js";
 
 // Qoder shares one live resolver across intl (qoder) and CN (qoder-cn); the
 // credentials carry the provider id so qoderModels picks the right region's
@@ -359,8 +360,13 @@ export async function buildModelsList(kindFilter, options = {}) {
   const acpEnabledModels = {};
   try {
     const acpSettings = await getAllAcpAgentSettings();
-    for (const [providerId, entry] of Object.entries(acpSettings)) {
-      if (Array.isArray(entry?.enabledModels)) acpEnabledModels[providerId] = entry.enabledModels;
+    for (const providerId of Object.keys(PROVIDERS)) {
+      const entry = acpSettings[providerId] || {};
+      const configured = Array.isArray(entry.enabledModels) ? entry.enabledModels : null;
+      const live = readCachedCatalog(providerId);
+      const discovered = Array.isArray(live?.models) ? live.models.map((model) => model.id).filter(Boolean) : [];
+      if (configured) acpEnabledModels[providerId] = configured;
+      else if (discovered.length) acpEnabledModels[providerId] = discovered;
     }
   } catch (e) {
     console.log("Could not read ACP agent settings:", e?.message || e);
