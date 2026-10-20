@@ -391,7 +391,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     if (!proxyOptions.connectionProxyUrl) return null;
     try { return new URL(proxyOptions.connectionProxyUrl).hostname || null; } catch { return null; }
   })();
-  log?.info?.("PROXY_RESOLVED", JSON.stringify({
+  const proxyDiagnostic = JSON.stringify({
     provider,
     model,
     enabled: proxyOptions.connectionProxyEnabled,
@@ -399,7 +399,9 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     strict: proxyOptions.strictProxy,
     host: resolvedProxyHost,
     hasUrl: Boolean(proxyOptions.connectionProxyUrl),
-  }));
+  });
+  log?.info?.("PROXY_RESOLVED", proxyDiagnostic);
+  console.log(`[PROXY_RESOLVED] ${proxyDiagnostic}`);
 
   if (proxyOptions.vercelRelayUrl) {
     const connectionName = credentials?.connectionName || credentials?.connectionId || "unknown";
