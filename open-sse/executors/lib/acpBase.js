@@ -543,7 +543,14 @@ export class AcpAgentExecutor extends BaseExecutor {
         // `start()` callback below runs with the stream as `this`.
         const sessionConnection = credentials?.connectionId || credentials?.connectionName;
         const sessionKey = sessionConnection
-          ? acpSessionKey({ provider: this.providerId, connection: sessionConnection, cwd: workspaceCwd, model })
+          ? acpSessionKey({
+              provider: this.providerId,
+              connection: sessionConnection,
+              cwd: workspaceCwd,
+              model,
+              proxy: proxyOptions?.connectionProxyEnabled ? proxyOptions.connectionProxyUrl : "",
+              noProxy: proxyOptions?.connectionNoProxy || "",
+            })
           : null;
         let pooled = null;
         let releaseSession = null;

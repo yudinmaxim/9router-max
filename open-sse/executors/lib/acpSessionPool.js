@@ -18,8 +18,8 @@ export function peekAcpSession(key) {
   return entry;
 }
 
-export function acpSessionKey({ provider, connection, cwd, model }) {
-  return JSON.stringify([provider || "", connection || "", cwd || "", model || ""]);
+export function acpSessionKey({ provider, connection, cwd, model, proxy = "", noProxy = "" }) {
+  return JSON.stringify([provider || "", connection || "", cwd || "", model || "", proxy || "", noProxy || ""]);
 }
 
 export function getAcpSession(key, now = Date.now()) {
