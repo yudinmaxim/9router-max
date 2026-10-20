@@ -61,7 +61,7 @@ import fs from "node:fs";
 import { BaseExecutor } from "../base.js";
 import { ensureAcpAdapter } from "./acpAdapter.js";
 import { createAcpTransport } from "./acpTransport.js";
-import { acpSessionKey, acquireAcpSession, peekAcpSession, putAcpSession, markAcpSessionDead } from "./acpSessionPool.js";
+import { acpSessionKey, acquireAcpSession, peekAcpSession, findAcpSession, putAcpSession, markAcpSessionDead } from "./acpSessionPool.js";
 import { resolveWorkspaceCwd, buildPromptText, extractMessages, estimateTokens, agentSpawnCommand } from "./acpCommon.js";
 import { stripHistoryForContext } from "../../services/capacityAdapter.js";
 import { getCapabilitiesForModel } from "../../providers/capabilities.js";
@@ -542,12 +542,12 @@ export class AcpAgentExecutor extends BaseExecutor {
         // inherited set rather than replacing it. Resolved out here because the
         // `start()` callback below runs with the stream as `this`.
         const sessionConnection = credentials?.connectionId || credentials?.connectionName;
-        const sessionKey = sessionConnection
+        const sessionIdentity = sessionConnection
+          ? { provider: this.providerId, connection: sessionConnection, cwd: workspaceCwd, model }
+          : null;
+        const sessionKey = sessionIdentity
           ? acpSessionKey({
-              provider: this.providerId,
-              connection: sessionConnection,
-              cwd: workspaceCwd,
-              model,
+              ...sessionIdentity,
               proxy: proxyOptions?.connectionProxyEnabled ? proxyOptions.connectionProxyUrl : "",
               noProxy: proxyOptions?.connectionNoProxy || "",
             })
@@ -557,7 +557,8 @@ export class AcpAgentExecutor extends BaseExecutor {
         let child;
         let transport;
         const { cmd, args: spawnArgs, shell } = agentSpawnCommand(bin, args);
-        const existing = sessionKey ? peekAcpSession(sessionKey) : null
+        const existing = sessionKey ? peekAcpSession(sessionKey) : null;
+        const prior = existing || (sessionIdentity ? findAcpSession(sessionIdentity) : null);
         if (existing && !existing.dead && existing.sessionId) {
           const acquired = await acquireAcpSession(sessionKey);
           pooled = acquired.entry;
@@ -587,8 +588,9 @@ export class AcpAgentExecutor extends BaseExecutor {
         let initDone = false;
         let sessionCreated = false;
         let promptSent = false;
-        let sessionId = pooled?.sessionId || null;
-        let catalog = pooled?.catalog || [];
+        let resumeAttempted = false;
+        let sessionId = pooled?.sessionId || prior?.sessionId || null;
+        let catalog = pooled?.catalog || prior?.catalog || [];
         if (pooled?.sessionId) {
           initDone = true;
           sessionCreated = true;
@@ -801,6 +803,11 @@ export class AcpAgentExecutor extends BaseExecutor {
             // ── initialize response → open a session ──────────────────────
             if (!initDone && msg.result !== undefined && !msg.method) {
               initDone = true;
+              if (prior?.sessionId && !pooled) {
+                resumeAttempted = true;
+                sendRpc("session/resume", { sessionId: prior.sessionId, cwd: workspaceCwd });
+                return;
+              }
               // `mcpServers` must be a sequence (an object is rejected with
               // -32602). Empty unless the caller sent tools we are bridging —
               // the agent runs its own tools either way.
@@ -818,17 +825,28 @@ export class AcpAgentExecutor extends BaseExecutor {
               return;
             }
 
-            // ── session/new response → sessionId + model catalog ──────────
-            if (initDone && !sessionCreated && msg.result !== undefined && !msg.method) {
+            // ── session/resume or session/new response → sessionId + model catalog ──
+            if (initDone && !sessionCreated && (msg.result !== undefined || msg.error) && !msg.method) {
               const res = msg.result || {};
-              sessionId = res.sessionId || null;
+              if (resumeAttempted && msg.error) {
+                resumeAttempted = false;
+                sendRpc("session/new", {
+                  cwd: workspaceCwd,
+                  mcpServers: [
+                    ...(clientToolsMcp ? [clientToolsMcp] : []),
+                    ...(Array.isArray(mcpProxyTargets) ? mcpProxyTargets : []),
+                  ],
+                });
+                return;
+              }
+              sessionId = res.sessionId || (resumeAttempted ? prior?.sessionId : null);
               if (!sessionId) {
-                finish(`ACP: session/new returned no sessionId`);
+                finish(`ACP: ${resumeAttempted ? "session/resume" : "session/new"} returned no sessionId`);
                 return;
               }
               sessionCreated = true;
               catalog = collectModelCatalog(res);
-              if (sessionKey) putAcpSession(sessionKey, { child, transport, sessionId, catalog });
+              if (sessionKey) putAcpSession(sessionKey, { child, transport, sessionId, catalog, cwd: workspaceCwd });
               const current = currentAgentModel(res);
               resolvedModelId = resolveAgentModelId(model, catalog, current);
               log?.debug?.(tag, `session=${sessionId} current=${current} requested=${model} → ${resolvedModelId}`);

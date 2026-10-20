@@ -22,6 +22,17 @@ export function acpSessionKey({ provider, connection, cwd, model, proxy = "", no
   return JSON.stringify([provider || "", connection || "", cwd || "", model || "", proxy || "", noProxy || ""]);
 }
 
+export function findAcpSession({ provider, connection, cwd, model }, now = Date.now()) {
+  for (const [key, entry] of sessions) {
+    if (entry.expiresAt <= now || entry.dead) continue;
+    let parts;
+    try { parts = JSON.parse(key); } catch { continue; }
+    if (parts[0] === (provider || "") && parts[1] === (connection || "") &&
+        parts[2] === (cwd || "") && parts[3] === (model || "")) return entry;
+  }
+  return null;
+}
+
 export function getAcpSession(key, now = Date.now()) {
   const entry = sessions.get(key);
   if (!entry || entry.expiresAt <= now || entry.dead) {
