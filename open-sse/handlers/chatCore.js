@@ -387,6 +387,20 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     vercelRelayUrl: credentials?.providerSpecificData?.vercelRelayUrl || "",
   };
 
+  const resolvedProxyHost = (() => {
+    if (!proxyOptions.connectionProxyUrl) return null;
+    try { return new URL(proxyOptions.connectionProxyUrl).hostname || null; } catch { return null; }
+  })();
+  log?.info?.("PROXY_RESOLVED", JSON.stringify({
+    provider,
+    model,
+    enabled: proxyOptions.connectionProxyEnabled,
+    poolId: proxyOptions.connectionProxyPoolId || null,
+    strict: proxyOptions.strictProxy,
+    host: resolvedProxyHost,
+    hasUrl: Boolean(proxyOptions.connectionProxyUrl),
+  }));
+
   if (proxyOptions.vercelRelayUrl) {
     const connectionName = credentials?.connectionName || credentials?.connectionId || "unknown";
     const poolId = credentials?.providerSpecificData?.connectionProxyPoolId || "none";
