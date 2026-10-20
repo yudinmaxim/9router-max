@@ -442,6 +442,16 @@ export class AcpAgentExecutor extends BaseExecutor {
       env.HTTPS_PROXY = proxyOptions.connectionProxyUrl;
       env.ALL_PROXY = proxyOptions.connectionProxyUrl;
       if (proxyOptions.connectionNoProxy) env.NO_PROXY = proxyOptions.connectionNoProxy;
+      log?.info?.("ACP_PROXY", JSON.stringify({
+        provider: this.providerId,
+        enabled: true,
+        poolId: proxyOptions.connectionProxyPoolId || null,
+        strict: proxyOptions.strictProxy === true,
+        protocol: (() => { try { return new URL(proxyOptions.connectionProxyUrl).protocol; } catch { return null; } })(),
+        host: (() => { try { return new URL(proxyOptions.connectionProxyUrl).hostname; } catch { return null; } })(),
+      }));
+    } else {
+      log?.info?.("ACP_PROXY", JSON.stringify({ provider: this.providerId, enabled: false }));
     }
     // Agents whose CLI has no ACP subcommand spawn a bridge instead (see
     // acpAdapter.js), which may need installing on this machine the first time.
