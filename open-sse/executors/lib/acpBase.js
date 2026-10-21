@@ -89,6 +89,28 @@ import {
 
 const ACP_URL = "acp://stdio";
 
+/**
+ * Opt-in lifecycle tracing for ACP child processes (`ACP_DEBUG_LOG=/path/file`).
+ *
+ * The router runs detached under the tray with stdout going to /dev/null, so
+ * console logging is invisible when diagnosing "why did the pooled child die
+ * between turns". One line per lifecycle event, appended to a file the caller
+ * can tail. No-ops unless the env var is set, and never logs proxy credentials
+ * (callers pass hosts only).
+ */
+const ACP_LIFECYCLE_LOG = process.env.ACP_DEBUG_LOG || "";
+function acpTrace(event, data = {}) {
+  if (!ACP_LIFECYCLE_LOG) return;
+  try {
+    fs.appendFileSync(
+      ACP_LIFECYCLE_LOG,
+      `${new Date().toISOString()} ${event} ${JSON.stringify(data)}\n`
+    );
+  } catch {
+    /* a tracing failure must never affect the request */
+  }
+}
+
 // Cursor's explicit "let the agent decide" entry. Other agents have no
 // equivalent, so this is only ever used when the catalog actually contains it.
 const AUTO_MODEL = "default[]";
@@ -585,6 +607,7 @@ export class AcpAgentExecutor extends BaseExecutor {
           releaseSession = acquired.release;
           child = pooled.child;
           transport = pooled.transport;
+          acpTrace("reuse", { provider: this.providerId, pid: child.pid, sessionId: pooled.sessionId });
         } else {
           child = spawn(cmd, spawnArgs, {
             env,
@@ -592,6 +615,7 @@ export class AcpAgentExecutor extends BaseExecutor {
             stdio: ["pipe", "pipe", "pipe"],
             shell,
           });
+          acpTrace("spawn", { provider: this.providerId, pid: child.pid, cmd, hadEntry: Boolean(existing) });
         }
 
         let spawnError = null;
@@ -599,6 +623,7 @@ export class AcpAgentExecutor extends BaseExecutor {
 
         if (signal) {
           signal.addEventListener("abort", () => {
+            acpTrace("abort-signal", { provider: this.providerId, pid: child.pid, killed: child.killed, finished });
             if (!child.killed) child.kill("SIGTERM");
           });
         }
@@ -703,6 +728,15 @@ export class AcpAgentExecutor extends BaseExecutor {
         const finish = (error, finishReason = "stop", errorCode) => {
           if (finished) return;
           finished = true;
+          acpTrace("finish", {
+            provider: this.providerId,
+            pid: child.pid,
+            error: error || null,
+            finishReason,
+            pooled: Boolean(pooled),
+            pooledNow: sessionPooledNow,
+            hadRelease: Boolean(releaseSession),
+          });
           if (error) {
             emit(
               `data: ${JSON.stringify({
@@ -747,6 +781,7 @@ export class AcpAgentExecutor extends BaseExecutor {
           try {
             if (!stdinClosed) {
               stdinClosed = true;
+              acpTrace("stdin-end", { provider: this.providerId, pid: child.pid });
               child.stdin.end();
             }
           } catch {
@@ -755,6 +790,7 @@ export class AcpAgentExecutor extends BaseExecutor {
 
           // Give the CLI a moment to exit cleanly, then make sure it does.
           const killTimer = setTimeout(() => {
+            acpTrace("sigkill-timer", { provider: this.providerId, pid: child.pid, killed: child.killed });
             if (!child.killed) child.kill("SIGKILL");
           }, 2000);
           killTimer.unref?.();
@@ -797,6 +833,7 @@ export class AcpAgentExecutor extends BaseExecutor {
 
         const startPrompt = () => {
           promptSent = true;
+          acpTrace("prompt", { provider: this.providerId, pid: child.pid, sessionId, model });
           // A dead transport rejects nothing — `send` just returns void. Without
           // this check the turn would wait forever for a response that can
           // never arrive, holding the session queue behind it.
@@ -833,14 +870,17 @@ export class AcpAgentExecutor extends BaseExecutor {
             // ── initialize response → open a session ──────────────────────
             if (!initDone && msg.result !== undefined && !msg.method) {
               initDone = true;
+              acpTrace("initialized", { provider: this.providerId, pid: child.pid, resume: Boolean(prior?.sessionId && !pooled) });
               if (prior?.sessionId && !pooled) {
                 resumeAttempted = true;
+                acpTrace("resume", { provider: this.providerId, pid: child.pid, sessionId: prior.sessionId });
                 sendRpc("session/resume", { sessionId: prior.sessionId, cwd: workspaceCwd });
                 return;
               }
               // `mcpServers` must be a sequence (an object is rejected with
               // -32602). Empty unless the caller sent tools we are bridging —
               // the agent runs its own tools either way.
+              acpTrace("session-new", { provider: this.providerId, pid: child.pid, fallback: resumeAttempted });
               sendRpc("session/new", {
                 cwd: workspaceCwd,
                 // The client-tool bridge first: agents may rename a bridged tool,
@@ -882,6 +922,7 @@ export class AcpAgentExecutor extends BaseExecutor {
               if (sessionKey) {
                 putAcpSession(sessionKey, { child, transport, sessionId, catalog, cwd: workspaceCwd });
                 sessionPooledNow = true;
+                acpTrace("pooled", { provider: this.providerId, pid: child.pid, sessionId });
               }
               const current = currentAgentModel(res);
               resolvedModelId = resolveAgentModelId(model, catalog, current);
@@ -1094,6 +1135,15 @@ export class AcpAgentExecutor extends BaseExecutor {
         });
 
         child.on("close", (code) => {
+          acpTrace("close", {
+            provider: this.providerId,
+            pid: child.pid,
+            code,
+            signal: child.signalCode,
+            finished,
+            pooled: Boolean(pooled),
+            pooledNow: sessionPooledNow,
+          });
           // Whoever owned the child, a closed one must never stay in the pool:
           // a stale entry makes the next turn reuse a dead transport and hang.
           // Compare the child so a late exit cannot evict a newer healthy entry.
