@@ -564,12 +564,22 @@ export class AcpAgentExecutor extends BaseExecutor {
           : null;
         let pooled = null;
         let releaseSession = null;
+        // True once this turn stored its child in the pool (fresh session).
+        let sessionPooledNow = false;
         let child;
         let transport;
         const { cmd, args: spawnArgs, shell } = agentSpawnCommand(bin, args);
         const existing = sessionKey ? peekAcpSession(sessionKey) : null;
+        // A pooled entry can outlive its child: the child may exit on its own,
+        // be killed by an aborted turn, or die with the pool entry still in the
+        // map. Reusing its closed transport would hang the turn forever, so a
+        // dead child demotes the entry to a plain `prior` (resume source).
+        const reusable = Boolean(
+          existing && !existing.dead && existing.sessionId &&
+          existing.child && existing.child.exitCode === null && !existing.child.killed
+        );
         const prior = existing || (sessionIdentity ? findAcpSession(sessionIdentity) : null);
-        if (existing && !existing.dead && existing.sessionId) {
+        if (reusable) {
           const acquired = await acquireAcpSession(sessionKey);
           pooled = acquired.entry;
           releaseSession = acquired.release;
@@ -718,8 +728,12 @@ export class AcpAgentExecutor extends BaseExecutor {
 
           removeMessageListener?.();
           removeMessageListener = null;
-          if (releaseSession) {
-            releaseSession();
+          // A pooled child stays alive between turns — that is the whole point
+          // of the pool. Both the reused entry (`releaseSession`) and a session
+          // pooled during this turn (`sessionPooledNow`) must skip the stdin
+          // close + SIGKILL below, otherwise the pool keeps a dead child.
+          if (releaseSession || sessionPooledNow) {
+            releaseSession?.();
             releaseSession = null;
             if (sinkPoll) {
               clearInterval(sinkPoll);
@@ -783,10 +797,16 @@ export class AcpAgentExecutor extends BaseExecutor {
 
         const startPrompt = () => {
           promptSent = true;
-          sendRpc("session/prompt", {
+          // A dead transport rejects nothing — `send` just returns void. Without
+          // this check the turn would wait forever for a response that can
+          // never arrive, holding the session queue behind it.
+          if (!sendRpc("session/prompt", {
             sessionId,
             prompt: [{ type: "text", text: promptText }],
-          });
+          })) {
+            if (sessionKey && peekAcpSession(sessionKey)?.child === child) markAcpSessionDead(sessionKey);
+            finish(`${label} ACP transport closed before the prompt could be sent`);
+          }
         };
 
         /**
@@ -859,7 +879,10 @@ export class AcpAgentExecutor extends BaseExecutor {
               }
               sessionCreated = true;
               catalog = collectModelCatalog(res);
-              if (sessionKey) putAcpSession(sessionKey, { child, transport, sessionId, catalog, cwd: workspaceCwd });
+              if (sessionKey) {
+                putAcpSession(sessionKey, { child, transport, sessionId, catalog, cwd: workspaceCwd });
+                sessionPooledNow = true;
+              }
               const current = currentAgentModel(res);
               resolvedModelId = resolveAgentModelId(model, catalog, current);
               log?.debug?.(tag, `session=${sessionId} current=${current} requested=${model} → ${resolvedModelId}`);
@@ -1071,7 +1094,10 @@ export class AcpAgentExecutor extends BaseExecutor {
         });
 
         child.on("close", (code) => {
-          if (pooled && sessionKey) markAcpSessionDead(sessionKey);
+          // Whoever owned the child, a closed one must never stay in the pool:
+          // a stale entry makes the next turn reuse a dead transport and hang.
+          // Compare the child so a late exit cannot evict a newer healthy entry.
+          if (sessionKey && peekAcpSession(sessionKey)?.child === child) markAcpSessionDead(sessionKey);
           if (finished) return;
           if (code !== 0 && !spawnError && !roleEmitted) {
             finish(`${label} CLI exited with code ${code}`);
