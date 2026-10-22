@@ -476,6 +476,15 @@ export class AcpAgentExecutor extends BaseExecutor {
     } else {
       log?.info?.("ACP_PROXY", JSON.stringify({ provider: this.providerId, enabled: false }));
     }
+    // Host/pool only — the lifecycle trace must not carry proxy credentials.
+    const proxyTrace = {
+      proxyEnabled: Boolean(proxyOptions?.connectionProxyEnabled && proxyOptions.connectionProxyUrl),
+      proxyPoolId: proxyOptions?.connectionProxyPoolId || null,
+      proxyHost: (() => {
+        try { return proxyOptions?.connectionProxyUrl ? new URL(proxyOptions.connectionProxyUrl).hostname : null; }
+        catch { return null; }
+      })(),
+    };
     // Agents whose CLI has no ACP subcommand spawn a bridge instead (see
     // acpAdapter.js), which may need installing on this machine the first time.
     const bin = this.acp.adapter
@@ -608,7 +617,7 @@ export class AcpAgentExecutor extends BaseExecutor {
           releaseSession = acquired.release;
           child = pooled.child;
           transport = pooled.transport;
-          acpTrace("reuse", { provider: this.providerId, pid: child.pid, sessionId: pooled.sessionId });
+          acpTrace("reuse", { provider: this.providerId, pid: child.pid, sessionId: pooled.sessionId, ...proxyTrace });
         } else {
           child = spawn(cmd, spawnArgs, {
             env,
