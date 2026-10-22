@@ -146,6 +146,16 @@ export const ACP_ADAPTER_INSTALL_TIMEOUT_MS = 180000;
 // would otherwise pay the timeout on each one.
 export const ACP_ADAPTER_RETRY_COOLDOWN_MS = 600000;
 
+// Optional lifecycle tracing for ACP child processes (see acpBase.acpTrace).
+//
+// Off by default: when both are empty nothing is written and the cost is a
+// single falsy check per event. Enable it either with the env var (good for a
+// one-off investigation) or by pointing the constant at a file (good for a
+// machine where ACP sessions get diagnosed routinely). The env wins so an
+// operator does not have to rebuild to turn it on.
+export const ACP_LIFECYCLE_LOG_ENV = "ACP_DEBUG_LOG";
+export const ACP_LIFECYCLE_LOG_PATH = "";
+
 // Retry config for 429 responses (legacy - kept for backward compatibility)
 export const RETRY_CONFIG = {
   maxAttempts: 2,

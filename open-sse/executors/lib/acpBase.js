@@ -74,7 +74,7 @@ import {
   parsePolicyInput,
   chooseOption,
 } from "./acpPermissions.js";
-import { ACP_PERMISSION_HEADER, ACP_PERMISSION_BODY_KEY, ACP_DEFAULTS_HEADER, ACP_DEFAULTS_BODY_KEY } from "../../config/runtimeConfig.js";
+import { ACP_PERMISSION_HEADER, ACP_PERMISSION_BODY_KEY, ACP_DEFAULTS_HEADER, ACP_DEFAULTS_BODY_KEY, ACP_LIFECYCLE_LOG_ENV, ACP_LIFECYCLE_LOG_PATH } from "../../config/runtimeConfig.js";
 import {
   CLIENT_TOOLS_SERVER_NAME,
   buildClientToolsMcp,
@@ -90,22 +90,23 @@ import {
 const ACP_URL = "acp://stdio";
 
 /**
- * Opt-in lifecycle tracing for ACP child processes (`ACP_DEBUG_LOG=/path/file`).
+ * Opt-in lifecycle tracing for ACP child processes.
  *
- * The router runs detached under the tray with stdout going to /dev/null, so
- * console logging is invisible when diagnosing "why did the pooled child die
- * between turns". One line per lifecycle event, appended to a file the caller
- * can tail. No-ops unless the env var is set, and never logs proxy credentials
- * (callers pass hosts only).
+ * The router runs detached under the tray (stdout → /dev/null), so console
+ * logging is invisible when diagnosing "why did the pooled child die between
+ * turns". One line per lifecycle event, appended to a file. The path comes from
+ * config — see ACP_LIFECYCLE_LOG_ENV / ACP_LIFECYCLE_LOG_PATH — and tracing is
+ * off unless one of them is set. Callers pass hosts only; no credentials.
  */
-const ACP_LIFECYCLE_LOG = process.env.ACP_DEBUG_LOG || "";
+function acpTracePath() {
+  const fromEnv = process.env[ACP_LIFECYCLE_LOG_ENV];
+  return (typeof fromEnv === "string" && fromEnv.trim()) || ACP_LIFECYCLE_LOG_PATH || "";
+}
 function acpTrace(event, data = {}) {
-  if (!ACP_LIFECYCLE_LOG) return;
+  const file = acpTracePath();
+  if (!file) return;
   try {
-    fs.appendFileSync(
-      ACP_LIFECYCLE_LOG,
-      `${new Date().toISOString()} ${event} ${JSON.stringify(data)}\n`
-    );
+    fs.appendFileSync(file, `${new Date().toISOString()} ${event} ${JSON.stringify(data)}\n`);
   } catch {
     /* a tracing failure must never affect the request */
   }
