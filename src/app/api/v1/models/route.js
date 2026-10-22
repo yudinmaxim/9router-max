@@ -22,6 +22,12 @@ import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
 import { getAllAcpAgentSettings } from "@/lib/acpAgents";
 import { readCachedCatalog } from "open-sse/executors/lib/acpCatalog.js";
+// Used to walk every registered provider for the ACP `enabledModels` choice
+// below. This import was missing, so the loop threw `PROVIDERS is not
+// defined`, the catch swallowed it and `acpEnabledModels` stayed empty — every
+// ACP agent then published its static registry entry (`cxc/default`) instead
+// of the models the user ticked on the provider page.
+import { PROVIDERS } from "open-sse/config/providers.js";
 
 // Qoder shares one live resolver across intl (qoder) and CN (qoder-cn); the
 // credentials carry the provider id so qoderModels picks the right region's
