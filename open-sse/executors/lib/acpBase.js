@@ -650,6 +650,10 @@ export class AcpAgentExecutor extends BaseExecutor {
         let sessionCreated = false;
         let promptSent = false;
         let resumeAttempted = false;
+        // Id of the in-flight session/resume|session/new request, so an empty
+        // answer to *our* call is told apart from the unrelated response frames
+        // agents emit while initialization is still completing.
+        let sessionCreateRequestId = null;
         let sessionId = pooled?.sessionId || prior?.sessionId || null;
         let catalog = pooled?.catalog || prior?.catalog || [];
         if (pooled?.sessionId) {
@@ -672,10 +676,20 @@ export class AcpAgentExecutor extends BaseExecutor {
         let finished = false;
 
         if (!transport) transport = createAcpTransport(child);
-        const sendRpc = (method, params) => {
+        const sendRpc = (method, params, beforeSend = null) => {
           const id = idCounter++;
+          // Two ids have to be known before the write leaves: a config pin (so a
+          // rejection maps to its option) and the session/new|resume call (so an
+          // empty answer maps to our own request). An agent may answer inside
+          // `stdin.write` — a test double does, and a fast local agent can — so
+          // anything registered after the send can be raced by its own reply.
+          if (method === "session/set_config_option") {
+            configSetIds.set(id, { configId: params?.configId ?? "", value: params?.value });
+          }
+          if (beforeSend) beforeSend(id);
           const ok = transport.send(method, params, id);
           acpTrace("rpc-send", { provider: this.providerId, pid: child?.pid, id, method, ok: Boolean(ok) });
+          if (!ok) configSetIds.delete(id);
           return ok ? id : null;
         };
         let removeMessageListener = null;
@@ -881,19 +895,16 @@ export class AcpAgentExecutor extends BaseExecutor {
         const sendNextConfigOption = () => {
           const next = pendingConfigSets.shift();
           if (!next) return;
-          // Track the id so a -32602 ("Unknown ACP config option" — the agent
-          // does not offer this option, or renamed it) can be matched to this
-          // call instead of failing the turn in the generic error handler.
-          const id = sendRpc("session/set_config_option", {
+          // The id is registered inside sendRpc, before the write reaches the
+          // agent, so a rejection is matched to this option either way.
+          if (sendRpc("session/set_config_option", {
             sessionId,
             configId: next.configId,
             value: next.value,
-          });
-          if (id === null) {
+          }) === null) {
             // stdin already closed — the close handler will finish the turn.
             return;
           }
-          configSetIds.set(id, { configId: next.configId, value: next.value });
         };
 
         // ── stdout reader (NDJSON) ──────────────────────────────────────────
@@ -906,7 +917,9 @@ export class AcpAgentExecutor extends BaseExecutor {
               if (prior?.sessionId && !pooled) {
                 resumeAttempted = true;
                 acpTrace("resume", { provider: this.providerId, pid: child.pid, sessionId: prior.sessionId });
-                sendRpc("session/resume", { sessionId: prior.sessionId, cwd: workspaceCwd });
+                sendRpc("session/resume", { sessionId: prior.sessionId, cwd: workspaceCwd }, (id) => {
+                  sessionCreateRequestId = id;
+                });
                 return;
               }
               // `mcpServers` must be a sequence (an object is rejected with
@@ -923,7 +936,7 @@ export class AcpAgentExecutor extends BaseExecutor {
                   ...(clientToolsMcp ? [clientToolsMcp] : []),
                   ...(Array.isArray(mcpProxyTargets) ? mcpProxyTargets : []),
                 ],
-              });
+              }, (id) => { sessionCreateRequestId = id; });
               return;
             }
 
@@ -938,15 +951,22 @@ export class AcpAgentExecutor extends BaseExecutor {
                     ...(clientToolsMcp ? [clientToolsMcp] : []),
                     ...(Array.isArray(mcpProxyTargets) ? mcpProxyTargets : []),
                   ],
-                });
+                }, (id) => { sessionCreateRequestId = id; });
                 return;
               }
               sessionId = res.sessionId || (resumeAttempted ? prior?.sessionId : null);
-              // ACP agents may emit an unrelated response/update while session
-              // initialization is still completing. Ignore result frames that do
-              // not carry session state; only an explicit error ends the flow.
+              // ACP agents may emit an unrelated response while session
+              // initialization is still completing; those frames carry no
+              // session state and are still ignored. What must NOT be ignored
+              // is an empty answer to our own session/new|session/resume: no
+              // session will ever arrive from it, and without this branch the
+              // turn waits forever (and holds the session queue behind it).
               if (!sessionId) {
-                if (msg.error) finish(`ACP: ${resumeAttempted ? "session/resume" : "session/new"} failed: ${msg.error.message || "unknown error"}`);
+                const flow = resumeAttempted ? "session/resume" : "session/new";
+                if (msg.error) finish(`ACP: ${flow} failed: ${msg.error.message || "unknown error"}`);
+                else if (sessionCreateRequestId !== null && msg.id === sessionCreateRequestId) {
+                  finish(`ACP: ${flow} returned no sessionId`);
+                }
                 return;
               }
               sessionCreated = true;
