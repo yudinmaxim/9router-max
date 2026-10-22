@@ -646,6 +646,9 @@ export class AcpAgentExecutor extends BaseExecutor {
         // time before the prompt. The agent blocks on each, so they cannot be
         // fired in parallel.
         const pendingConfigSets = [];
+        // In-flight `session/set_config_option` request ids → configId, so the
+        // error handler can tell an option rejection from a turn failure.
+        const configSetIds = new Map();
 
         const responseId = `chatcmpl-acp-${Date.now()}`;
         const created = Math.floor(Date.now() / 1000);
@@ -654,7 +657,12 @@ export class AcpAgentExecutor extends BaseExecutor {
         let finished = false;
 
         if (!transport) transport = createAcpTransport(child);
-        const sendRpc = (method, params) => transport.send(method, params, idCounter++);
+        const sendRpc = (method, params) => {
+          const id = idCounter++;
+          const ok = transport.send(method, params, id);
+          acpTrace("rpc-send", { provider: this.providerId, pid: child?.pid, id, method, ok: Boolean(ok) });
+          return ok ? id : null;
+        };
         let removeMessageListener = null;
 
         // Answer an agent-initiated request under the id the agent chose.
@@ -858,11 +866,19 @@ export class AcpAgentExecutor extends BaseExecutor {
         const sendNextConfigOption = () => {
           const next = pendingConfigSets.shift();
           if (!next) return;
-          sendRpc("session/set_config_option", {
+          // Track the id so a -32602 ("Unknown ACP config option" — the agent
+          // does not offer this option, or renamed it) can be matched to this
+          // call instead of failing the turn in the generic error handler.
+          const id = sendRpc("session/set_config_option", {
             sessionId,
             configId: next.configId,
             value: next.value,
           });
+          if (id === null) {
+            // stdin already closed — the close handler will finish the turn.
+            return;
+          }
+          configSetIds.set(id, { configId: next.configId, value: next.value });
         };
 
         // ── stdout reader (NDJSON) ──────────────────────────────────────────
@@ -920,14 +936,27 @@ export class AcpAgentExecutor extends BaseExecutor {
               }
               sessionCreated = true;
               catalog = collectModelCatalog(res);
-              if (sessionKey) {
-                putAcpSession(sessionKey, { child, transport, sessionId, catalog, cwd: workspaceCwd });
-                sessionPooledNow = true;
-                acpTrace("pooled", { provider: this.providerId, pid: child.pid, sessionId });
-              }
               const current = currentAgentModel(res);
               resolvedModelId = resolveAgentModelId(model, catalog, current);
               log?.debug?.(tag, `session=${sessionId} current=${current} requested=${model} → ${resolvedModelId}`);
+              if (sessionKey) {
+                // `currentModel` is what this session is pinned to (what the agent
+                // reported, or what we are about to pin). A pooled reuse must
+                // compare against it: the stored `catalog` is a bare id list, so
+                // currentAgentModel() over it answers "" and every reuse would
+                // re-pin a model the agent already sits on — a call some agents
+                // answer with -32602.
+                putAcpSession(sessionKey, {
+                  child,
+                  transport,
+                  sessionId,
+                  catalog,
+                  cwd: workspaceCwd,
+                  currentModel: resolvedModelId || current,
+                });
+                sessionPooledNow = true;
+                acpTrace("pooled", { provider: this.providerId, pid: child.pid, sessionId });
+              }
 
               const refuseSelfRoute = () => finish(
                 `ACP: refusing to route back into 9router. The ${label} catalog only offers self-referential models; point the agent at a real upstream, or exclude this provider.`,
@@ -971,6 +1000,14 @@ export class AcpAgentExecutor extends BaseExecutor {
 
             // ── session/set_config_option response → next option, then prompt ─
             if (sessionCreated && !promptSent && msg.result !== undefined && !msg.method) {
+              const applied = configSetIds.get(msg.id);
+              configSetIds.delete(msg.id);
+              if (applied?.configId === "model") {
+                // The pin landed: record it so the next reuse compares against
+                // what the session is actually on instead of re-pinning.
+                const entry = sessionKey ? peekAcpSession(sessionKey) : null;
+                if (entry?.child === child) entry.currentModel = applied.value;
+              }
               if (pendingConfigSets.length) {
                 sendNextConfigOption();
               } else {
@@ -1123,9 +1160,39 @@ export class AcpAgentExecutor extends BaseExecutor {
 
             // ── error responses ──────────────────────────────────────────
             if (msg.error) {
+              acpTrace("rpc-error", {
+                provider: this.providerId,
+                pid: child?.pid,
+                id: msg.id,
+                code: msg.error.code,
+                message: msg.error.message,
+                data: msg.error.data ?? null,
+              });
               const detail = msg.error.data
                 ? ` (${JSON.stringify(msg.error.data)})`
                 : "";
+              // A rejected config option is the agent saying "I don't offer
+              // this option" (typically -32602). The operator's default was
+              // aspirational — the agent's own default stands and the prompt
+              // still goes out (see sendNextConfigOption).
+              const rejected = configSetIds.get(msg.id);
+              if (rejected !== undefined) {
+                configSetIds.delete(msg.id);
+                log?.debug?.(
+                  tag,
+                  `config option rejected, continuing: ${rejected.configId} (${msg.error.code}: ${msg.error.message})`
+                );
+                acpTrace("config-option-rejected", {
+                  provider: this.providerId,
+                  pid: child?.pid,
+                  configId: rejected.configId,
+                  code: msg.error.code,
+                  remaining: pendingConfigSets.length,
+                });
+                if (pendingConfigSets.length) sendNextConfigOption();
+                else startPrompt();
+                return;
+              }
               finish(`${label} ACP error ${msg.error.code}: ${msg.error.message}${detail}`);
               return;
             }
@@ -1160,7 +1227,14 @@ export class AcpAgentExecutor extends BaseExecutor {
 
         // ── handshake ───────────────────────────────────────────────────────
         if (pooled?.sessionId) {
-          const current = currentAgentModel({ configOptions: catalog });
+          // What the session is pinned to, recorded when it entered the pool
+          // (and refreshed below when a pin succeeds). Falling back to the
+          // catalog-derived value would compute "" — the catalog is a bare id
+          // list — and re-pin a model the agent is already on.
+          const current =
+            pooled.currentModel ||
+            currentAgentModel({ configOptions: catalog }) ||
+            "";
           resolvedModelId = resolveAgentModelId(model, catalog, current);
           for (const [configId, value] of Object.entries(sessionDefaults)) {
             if (configId !== "model" && typeof value === "string" && value) {
