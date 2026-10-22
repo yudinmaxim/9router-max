@@ -484,6 +484,12 @@ export class AcpAgentExecutor extends BaseExecutor {
         try { return proxyOptions?.connectionProxyUrl ? new URL(proxyOptions.connectionProxyUrl).hostname : null; }
         catch { return null; }
       })(),
+      // The pools all sit on 127.0.0.1 and differ only by port, so without it
+      // a rotation trace would be unreadable.
+      proxyPort: (() => {
+        try { return proxyOptions?.connectionProxyUrl ? new URL(proxyOptions.connectionProxyUrl).port || null : null; }
+        catch { return null; }
+      })(),
     };
     // Agents whose CLI has no ACP subcommand spawn a bridge instead (see
     // acpAdapter.js), which may need installing on this machine the first time.
@@ -625,7 +631,7 @@ export class AcpAgentExecutor extends BaseExecutor {
             stdio: ["pipe", "pipe", "pipe"],
             shell,
           });
-          acpTrace("spawn", { provider: this.providerId, pid: child.pid, cmd, hadEntry: Boolean(existing) });
+          acpTrace("spawn", { provider: this.providerId, pid: child.pid, cmd, hadEntry: Boolean(existing), ...proxyTrace });
         }
 
         let spawnError = null;
