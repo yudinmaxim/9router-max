@@ -46,11 +46,15 @@ const REQUESTED_MODEL = "gpt-5.3-codex";
  * Fake `cursor-agent acp` subprocess with the ACP flows a pooled session walks
  * through: initialize, session/new, session/resume, the model pin, the prompt.
  *
- * `rejectConfigOptions` reproduces Codex, which answers -32602 for config
- * options it does not expose. `exitCode` mirrors a live process (null until it
- * dies) — the reuse guard compares against exactly that field.
+ * `rejectConfigOptions` reproduces Codex answering -32602 for a dashboard
+ * option it does not expose — tolerated, the turn continues. `rejectModelPin`
+ * reproduces the agent refusing `configId:"model"` itself, which now fails the
+ * turn (an agent default may route back into 9router). The two are told apart
+ * by configId because the base treats them differently. `exitCode` mirrors a
+ * live process (null until it dies) — the reuse guard compares against exactly
+ * that field.
  */
-function makeFakeChild({ rejectConfigOptions = false, stopReason = "end_turn" } = {}) {
+function makeFakeChild({ rejectConfigOptions = false, rejectModelPin = false, stopReason = "end_turn" } = {}) {
   const child = new EventEmitter();
   child.writes = [];
   child.exitCode = null;
@@ -93,7 +97,8 @@ function makeFakeChild({ rejectConfigOptions = false, stopReason = "end_turn" } 
     } else if (msg.method === "session/new" || msg.method === "session/resume") {
       sessionResult(msg.id);
     } else if (msg.method === "session/set_config_option") {
-      if (rejectConfigOptions) {
+      const isModel = msg.params?.configId === "model";
+      if ((isModel && rejectModelPin) || (!isModel && rejectConfigOptions)) {
         send({ jsonrpc: "2.0", id: msg.id, error: { code: -32602, message: "Invalid params" } });
         return;
       }
@@ -155,19 +160,44 @@ afterEach(() => clearAcpSessions());
 describe("rejected config option", () => {
   it("keeps the turn alive and still sends the prompt", async () => {
     const child = makeFakeChild({ rejectConfigOptions: true });
-    const acc = await runTurn(child);
+    // A dashboard default (not the model pin) is what gets refused here: the
+    // agent does not expose that option, the base logs and continues.
+    const acc = await runTurn(child, { acpSessionDefaults: { collaboration_mode: "agent" } });
 
-    // The pin goes out first, the agent turns it down, and the prompt follows
-    // on the same turn instead of failing it.
+    // The dashboard default goes out first and is turned down; the model pin
+    // that follows is accepted, and the prompt still goes out on the same
+    // turn instead of failing it.
     expect(methods(child)).toEqual([
       "initialize",
       "session/new",
       "session/set_config_option",
+      "session/set_config_option",
       "session/prompt",
     ]);
+    const configCalls = written(child).filter((m) => m.method === "session/set_config_option");
+    expect(configCalls.map((m) => m.params.configId)).toEqual(["collaboration_mode", "model"]);
     expect(acc).not.toContain('"error"');
     const frames = sseFrames(acc);
     expect(frames.at(-1).choices[0].finish_reason).toBe("stop");
+    expect(acc.trim().endsWith("data: [DONE]")).toBe(true);
+  });
+
+  it("fails the turn when the agent refuses the model pin", async () => {
+    const child = makeFakeChild({ rejectModelPin: true });
+    const acc = await runTurn(child);
+
+    // The pin is the only config option this request sends, and its rejection
+    // must end the turn loudly — falling back to the agent's own default model
+    // is how a self-referential routing loop starts. So: an error frame naming
+    // the refused model, and no prompt.
+    expect(methods(child)).toEqual([
+      "initialize",
+      "session/new",
+      "session/set_config_option",
+    ]);
+    expect(methods(child)).not.toContain("session/prompt");
+    const frames = sseFrames(acc);
+    expect(frames[0].error.message).toMatch(/Cursor Agent.*refused the model pin/);
     expect(acc.trim().endsWith("data: [DONE]")).toBe(true);
   });
 

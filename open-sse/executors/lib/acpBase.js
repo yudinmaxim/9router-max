@@ -890,8 +890,10 @@ export class AcpAgentExecutor extends BaseExecutor {
          *
          * These are the operator's dashboard choices (access mode, collaboration
          * mode, reasoning level) plus the model this request resolved to. A
-         * failed option must not cost the turn: the agent's own default stands
-         * and the prompt still goes out.
+         * failed dashboard option must not cost the turn: the agent's own
+         * default stands and the prompt still goes out. The model pin is the
+         * exception — a rejected pin fails the turn in the error handler, since
+         * the agent's default may route straight back into 9router.
          */
         const sendNextConfigOption = () => {
           const next = pendingConfigSets.shift();
@@ -1020,7 +1022,11 @@ export class AcpAgentExecutor extends BaseExecutor {
               // wins over whatever the agent had selected. `model` is excluded:
               // it is decided below, from this request.
               for (const [configId, value] of Object.entries(sessionDefaults)) {
-                if (configId === "model" || typeof value !== "string" || !value) return;
+                // `continue`, not `return`: a single skipped entry (the
+                // dashboard `model`, which this request decides anyway) must
+                // not abort the loop — that would also skip the pin and
+                // `startPrompt()` below and hang the turn with no prompt.
+                if (configId === "model" || typeof value !== "string" || !value) continue;
                 pendingConfigSets.push({ configId, value });
               }
 
@@ -1211,16 +1217,21 @@ export class AcpAgentExecutor extends BaseExecutor {
                 ? ` (${JSON.stringify(msg.error.data)})`
                 : "";
               // A rejected config option is the agent saying "I don't offer
-              // this option" (typically -32602). The operator's default was
-              // aspirational — the agent's own default stands and the prompt
-              // still goes out (see sendNextConfigOption).
+              // this option" (typically -32602). For the operator's dashboard
+              // defaults that is survivable — the agent's own default stands
+              // and the prompt still goes out (see sendNextConfigOption).
+              //
+              // The model pin is different. The sessionDefaults loops exclude
+              // `model`, so the only configId:"model" ever sent is the model
+              // THIS request resolved to. If the agent refuses it, running on
+              // the agent's own default is how a self-referential loop starts:
+              // ACP children are themselves pointed at 9router models, so the
+              // default would call this very gateway again, one process per
+              // hop. Fail the turn loudly instead — the caller sees which
+              // model was refused rather than paying for a silent recursion.
               const rejected = configSetIds.get(msg.id);
               if (rejected !== undefined) {
                 configSetIds.delete(msg.id);
-                log?.debug?.(
-                  tag,
-                  `config option rejected, continuing: ${rejected.configId} (${msg.error.code}: ${msg.error.message})`
-                );
                 acpTrace("config-option-rejected", {
                   provider: this.providerId,
                   pid: child?.pid,
@@ -1228,6 +1239,18 @@ export class AcpAgentExecutor extends BaseExecutor {
                   code: msg.error.code,
                   remaining: pendingConfigSets.length,
                 });
+                if (rejected.configId === "model") {
+                  finish(
+                    `${label} refused the model pin ${JSON.stringify(rejected.value)}: ` +
+                    `${msg.error.code}: ${msg.error.message}. Refusing to fall back to the agent's own ` +
+                    `default — it may route back into 9router. Pin a model the agent actually offers.`
+                  );
+                  return;
+                }
+                log?.debug?.(
+                  tag,
+                  `config option rejected, continuing: ${rejected.configId} (${msg.error.code}: ${msg.error.message})`
+                );
                 if (pendingConfigSets.length) sendNextConfigOption();
                 else startPrompt();
                 return;
