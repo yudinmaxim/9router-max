@@ -307,6 +307,34 @@ describe("ACP client-tool bridge: call routing fallback", () => {
     expect(JSON.parse(calls[0].arguments)).toEqual({ path: "/tmp/b.txt" });
   });
 
+  it("unwraps the codex-acp MCP envelope carried in rawInput", async () => {
+    // Verified live against codex-acp 1.x: rawInput is its internal
+    // {server, tool, arguments}, not the tool's own arguments. Forwarded
+    // verbatim, the client gave the wrapper to the real tool and every
+    // execution failed (serena: "substring_pattern Field required").
+    const { acc } = await runExecute({
+      updates: [
+        { sessionUpdate: "tool_call", toolCallId: "exec-1", status: "pending", title: "Calling read_file from clientTools" },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "exec-1",
+          status: "in_progress",
+          rawInput: {
+            server: "clientTools",
+            tool: "read_file",
+            arguments: { path: "/tmp/live.txt" },
+          },
+        },
+      ],
+      body: { tools: [READ_FILE] },
+    });
+    const calls = toolCallFrames(acc);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe("read_file");
+    expect(JSON.parse(calls[0].arguments)).toEqual({ path: "/tmp/live.txt" });
+    expect(frames(acc).at(-1).choices[0].finish_reason).toBe("tool_calls");
+  });
+
   it("does not forward a bridged call the agent abandoned", async () => {
     // Permission denied upstream: the agent gives up. Handing the client a
     // tool_call it will never use just strands the conversation.

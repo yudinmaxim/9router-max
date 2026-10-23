@@ -85,6 +85,7 @@ import {
   drainToolCallSink,
   extractClientToolResults,
   fromMcpToolName,
+  unwrapClientToolArgs,
 } from "./acpClientTools.js";
 
 const ACP_URL = "acp://stdio";
@@ -1173,7 +1174,10 @@ export class AcpAgentExecutor extends BaseExecutor {
                   if (origName && update.rawInput) {
                     pendingClientTools.delete(tcId);
                     toolUseEmitted = true;
-                    emitToolUse(origName, update.rawInput, tcId || `call_${Date.now()}`);
+                    // codex-acp carries its internal MCP envelope here
+                    // ({server, tool, arguments}) — unwrap, or the client
+                    // forwards the wrapper to the real tool as its arguments.
+                    emitToolUse(origName, unwrapClientToolArgs(update.rawInput), tcId || `call_${Date.now()}`);
                     finish(null, "tool_calls");
                     return;
                   }

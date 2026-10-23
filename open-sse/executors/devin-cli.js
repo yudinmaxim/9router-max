@@ -77,6 +77,7 @@ import {
   drainToolCallSink,
   extractClientToolResults,
   fromMcpToolName,
+  unwrapClientToolArgs,
 } from "./lib/acpClientTools.js";
 
 const DEVIN_CLIENT_TOOL_PREFIX = "mcp_";
@@ -585,7 +586,10 @@ export class DevinCliExecutor extends BaseExecutor {
                 if (origName && update.rawInput) {
                   toolUseEmitted = true;
                   pendingClientTools.delete(tcId);
-                  emitToolUse(origName, update.rawInput, tcId || `call_${Date.now()}`);
+                  // Same envelope unwrap as acpBase: an agent that reports the
+                  // call as {server, tool, arguments} must not have the wrapper
+                  // forwarded to the real tool as its arguments.
+                  emitToolUse(origName, unwrapClientToolArgs(update.rawInput), tcId || `call_${Date.now()}`);
                   finish(null, "tool_calls");
                   return;
                 }

@@ -32,6 +32,15 @@ const RESULTS = JSON.parse(process.env.ACP_CLIENT_TOOL_RESULTS || "{}");
 const SINK = process.env.ACP_CLIENT_TOOLS_SINK || "";
 const rl = readline.createInterface({ input: process.stdin });
 function send(o){ process.stdout.write(JSON.stringify(o) + "\\n"); }
+// codex-acp wraps MCP arguments in its internal envelope {server, tool,
+// arguments}; unwrap or the sink records (and the client receives) the
+// wrapper instead of the tool's own arguments.
+function unwrapArgs(a){
+  return a && typeof a === "object" && !Array.isArray(a) &&
+    typeof a.server === "string" && typeof a.tool === "string" &&
+    a.arguments && typeof a.arguments === "object" && !Array.isArray(a.arguments)
+    ? a.arguments : a;
+}
 rl.on("line", (line) => {
   let m; try { m = JSON.parse(line); } catch { return; }
   if (m.method === "initialize") {
@@ -47,7 +56,7 @@ rl.on("line", (line) => {
     // by the time the agent announces it.
     if (SINK) {
       try {
-        fs.appendFileSync(SINK, JSON.stringify({ name, arguments: m.params?.arguments ?? {} }) + "\\n");
+        fs.appendFileSync(SINK, JSON.stringify({ name, arguments: unwrapArgs(m.params?.arguments ?? {}) }) + "\\n");
       } catch (e) {
         process.stderr.write("[client-tools] sink write failed: " + e.message + "\\n");
       }
@@ -141,6 +150,51 @@ export function toMcpToolName(name, prefix = "") {
 export function fromMcpToolName(name, prefix = "") {
   if (!prefix) return name;
   return name.startsWith(prefix) ? name.slice(prefix.length) : name;
+}
+
+/**
+ * codex-acp reports a bridged MCP call — both in the ACP `rawInput` and in the
+ * `tools/call` it sends the bridge server — as its internal envelope
+ * `{server, tool, arguments}` instead of the tool's own argument object.
+ * Verified live: the envelope reached serena verbatim and pydantic rejected it
+ * ("substring_pattern Field required ... input_value={'server': 'clientTools',
+ * ...}"), so every client-side tool execution failed. Unwrap the envelope;
+ * anything that is not the envelope passes through untouched, so agents that
+ * already send clean arguments are unaffected.
+ *
+ * Accepts the JSON-string form too — `rawInput` arrives as an object over ACP,
+ * but the same helper is used on already-serialized argument strings.
+ *
+ * @param {object|string} value
+ * @returns {object|string}
+ */
+export function unwrapClientToolArgs(value) {
+  if (typeof value === "string") {
+    let parsed;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return value;
+    }
+    const unwrapped = unwrapClientToolEnvelope(parsed);
+    return unwrapped === parsed ? value : JSON.stringify(unwrapped);
+  }
+  return unwrapClientToolEnvelope(value);
+}
+
+function unwrapClientToolEnvelope(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const { server, tool, arguments: args } = value;
+  if (
+    typeof server === "string" &&
+    typeof tool === "string" &&
+    args &&
+    typeof args === "object" &&
+    !Array.isArray(args)
+  ) {
+    return args;
+  }
+  return value;
 }
 
 /**
