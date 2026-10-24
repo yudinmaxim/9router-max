@@ -414,6 +414,7 @@ export class AcpAgentExecutor extends BaseExecutor {
    */
   constructor(providerId, spec) {
     super(providerId, { id: providerId, baseUrl: ACP_URL, noAuth: true });
+    this.providerId = providerId;
     this.acp = {
       args: ["acp"],
       tag: providerId.toUpperCase(),

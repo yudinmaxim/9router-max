@@ -75,6 +75,9 @@ const REQUESTED_MODEL = "gpt-5.3-codex";
 function makeFakeChild({ rejectConfigOptions = false, rejectModelPin = false, stopReason = "end_turn" } = {}) {
   const child = new EventEmitter();
   child.writes = [];
+  // A real spawned process always has a pid; the lifecycle trace keys its
+  // stream-side lines on it, so the double needs one too.
+  child.pid = 424242;
   child.exitCode = null;
   child.killed = false;
   child.kill = () => {
