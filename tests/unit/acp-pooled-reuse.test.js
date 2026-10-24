@@ -19,6 +19,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const { spawnMock, toolStates } = vi.hoisted(() => ({ spawnMock: vi.fn(), toolStates: [] }));
 
@@ -379,5 +381,38 @@ describe("pooled client-tool state", () => {
     expect(fs.existsSync(toolStates[0].dir)).toBe(false);
     expect(fs.existsSync(toolStates[1].dir)).toBe(true);
     expect(acc).not.toContain('"error"');
+  });
+});
+
+describe("lifecycle trace identity", () => {
+  // `start(controller)` runs with the ReadableStream's internal object as
+  // `this`, not the executor — so `this.providerId` inside it is undefined and
+  // every trace line lost the agent it described. Exactly the field an operator
+  // greps for when four pooled children are interleaved in one log.
+  it("stamps the provider id on every trace line written from inside start()", async () => {
+    const traceFile = fs.mkdtempSync(fs.realpathSync(os.tmpdir()) + "/acp-trace-") + "/trace.ndjson";
+    process.env.ACP_DEBUG_LOG = traceFile;
+    try {
+      const child = makeFakeChild();
+      await runTurn(child);
+
+      const lines = fs
+        .readFileSync(traceFile, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l.slice(l.indexOf("{"))));
+
+      // spawn + rpc-send(s) + pooled + finish … — a real turn always traces.
+      // Lines carrying a pid are the ones written from inside start(); the
+      // pre-fix `this.providerId` was undefined there, and JSON.stringify
+      // drops undefined values — so asserting the exact id is what pins the
+      // closure capture, not just the presence of a key.
+      const fromStream = lines.filter((l) => l.pid !== undefined);
+      expect(fromStream.length).toBeGreaterThan(0);
+      for (const line of fromStream) expect(line.provider).toBe("cursor-acp");
+    } finally {
+      delete process.env.ACP_DEBUG_LOG;
+      fs.rmSync(path.dirname(traceFile), { recursive: true, force: true });
+    }
   });
 });

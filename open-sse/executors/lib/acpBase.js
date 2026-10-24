@@ -664,7 +664,7 @@ export class AcpAgentExecutor extends BaseExecutor {
             const staleCalls = drainToolCallSink(clientToolSink);
             writeClientToolResults(clientToolState.resultsFile, clientToolResults);
             acpTrace("client-tools-state-reused", {
-              provider: this.providerId,
+              provider: providerId,
               pid: child.pid,
               sessionId: pooled.sessionId,
               sink: clientToolSink,
@@ -673,7 +673,7 @@ export class AcpAgentExecutor extends BaseExecutor {
               seededResults: Object.keys(clientToolResults).length,
             });
           }
-          acpTrace("reuse", { provider: this.providerId, pid: child.pid, sessionId: pooled.sessionId, ...proxyTrace });
+          acpTrace("reuse", { provider: providerId, pid: child.pid, sessionId: pooled.sessionId, ...proxyTrace });
         } else {
           child = spawn(cmd, spawnArgs, {
             env,
@@ -681,7 +681,7 @@ export class AcpAgentExecutor extends BaseExecutor {
             stdio: ["pipe", "pipe", "pipe"],
             shell,
           });
-          acpTrace("spawn", { provider: this.providerId, pid: child.pid, cmd, hadEntry: Boolean(existing), ...proxyTrace });
+          acpTrace("spawn", { provider: providerId, pid: child.pid, cmd, hadEntry: Boolean(existing), ...proxyTrace });
         }
 
         let spawnError = null;
@@ -689,7 +689,7 @@ export class AcpAgentExecutor extends BaseExecutor {
 
         if (signal) {
           signal.addEventListener("abort", () => {
-            acpTrace("abort-signal", { provider: this.providerId, pid: child.pid, killed: child.killed, finished });
+            acpTrace("abort-signal", { provider: providerId, pid: child.pid, killed: child.killed, finished });
             if (!child.killed) child.kill("SIGTERM");
           });
         }
@@ -738,7 +738,7 @@ export class AcpAgentExecutor extends BaseExecutor {
           }
           if (beforeSend) beforeSend(id);
           const ok = transport.send(method, params, id);
-          acpTrace("rpc-send", { provider: this.providerId, pid: child?.pid, id, method, ok: Boolean(ok) });
+          acpTrace("rpc-send", { provider: providerId, pid: child?.pid, id, method, ok: Boolean(ok) });
           if (!ok) configSetIds.delete(id);
           return ok ? id : null;
         };
@@ -808,7 +808,7 @@ export class AcpAgentExecutor extends BaseExecutor {
           if (!calls.length) return false;
           const call = calls[0];
           acpTrace("client-tools-sink-call", {
-            provider: this.providerId,
+            provider: providerId,
             pid: child.pid,
             sessionId,
             name: call.name,
@@ -836,7 +836,7 @@ export class AcpAgentExecutor extends BaseExecutor {
           if (finished) return;
           finished = true;
           acpTrace("finish", {
-            provider: this.providerId,
+            provider: providerId,
             pid: child.pid,
             error: error || null,
             finishReason,
@@ -887,7 +887,7 @@ export class AcpAgentExecutor extends BaseExecutor {
           try {
             if (!stdinClosed) {
               stdinClosed = true;
-              acpTrace("stdin-end", { provider: this.providerId, pid: child.pid });
+              acpTrace("stdin-end", { provider: providerId, pid: child.pid });
               child.stdin.end();
             }
           } catch {
@@ -896,7 +896,7 @@ export class AcpAgentExecutor extends BaseExecutor {
 
           // Give the CLI a moment to exit cleanly, then make sure it does.
           const killTimer = setTimeout(() => {
-            acpTrace("sigkill-timer", { provider: this.providerId, pid: child.pid, killed: child.killed });
+            acpTrace("sigkill-timer", { provider: providerId, pid: child.pid, killed: child.killed });
             if (!child.killed) child.kill("SIGKILL");
           }, 2000);
           killTimer.unref?.();
@@ -938,7 +938,7 @@ export class AcpAgentExecutor extends BaseExecutor {
 
         const startPrompt = () => {
           promptSent = true;
-          acpTrace("prompt", { provider: this.providerId, pid: child.pid, sessionId, model });
+          acpTrace("prompt", { provider: providerId, pid: child.pid, sessionId, model });
           // A dead transport rejects nothing — `send` just returns void. Without
           // this check the turn would wait forever for a response that can
           // never arrive, holding the session queue behind it.
@@ -982,10 +982,10 @@ export class AcpAgentExecutor extends BaseExecutor {
             // ── initialize response → open a session ──────────────────────
             if (!initDone && msg.result !== undefined && !msg.method) {
               initDone = true;
-              acpTrace("initialized", { provider: this.providerId, pid: child.pid, resume: Boolean(prior?.sessionId && !pooled) });
+              acpTrace("initialized", { provider: providerId, pid: child.pid, resume: Boolean(prior?.sessionId && !pooled) });
               if (prior?.sessionId && !pooled) {
                 resumeAttempted = true;
-                acpTrace("resume", { provider: this.providerId, pid: child.pid, sessionId: prior.sessionId });
+                acpTrace("resume", { provider: providerId, pid: child.pid, sessionId: prior.sessionId });
                 sendRpc("session/resume", { sessionId: prior.sessionId, cwd: workspaceCwd }, (id) => {
                   sessionCreateRequestId = id;
                 });
@@ -994,7 +994,7 @@ export class AcpAgentExecutor extends BaseExecutor {
               // `mcpServers` must be a sequence (an object is rejected with
               // -32602). Empty unless the caller sent tools we are bridging —
               // the agent runs its own tools either way.
-              acpTrace("session-new", { provider: this.providerId, pid: child.pid, fallback: resumeAttempted });
+              acpTrace("session-new", { provider: providerId, pid: child.pid, fallback: resumeAttempted });
               sendRpc("session/new", {
                 cwd: workspaceCwd,
                 // The client-tool bridge first: agents may rename a bridged tool,
@@ -1065,7 +1065,7 @@ export class AcpAgentExecutor extends BaseExecutor {
                   onDispose: toolStateForEntry
                     ? () => {
                         acpTrace("client-tools-state-disposed", {
-                          provider: this.providerId,
+                          provider: providerId,
                           pid: child.pid,
                           sessionId,
                           sink: toolStateForEntry.sink,
@@ -1078,7 +1078,7 @@ export class AcpAgentExecutor extends BaseExecutor {
                 toolStatePooled = Boolean(toolStateForEntry);
                 sessionPooledNow = true;
                 acpTrace("pooled", {
-                  provider: this.providerId,
+                  provider: providerId,
                   pid: child.pid,
                   sessionId,
                   clientTools: Boolean(toolStateForEntry),
@@ -1297,7 +1297,7 @@ export class AcpAgentExecutor extends BaseExecutor {
             // ── error responses ──────────────────────────────────────────
             if (msg.error) {
               acpTrace("rpc-error", {
-                provider: this.providerId,
+                provider: providerId,
                 pid: child?.pid,
                 id: msg.id,
                 code: msg.error.code,
@@ -1324,7 +1324,7 @@ export class AcpAgentExecutor extends BaseExecutor {
               if (rejected !== undefined) {
                 configSetIds.delete(msg.id);
                 acpTrace("config-option-rejected", {
-                  provider: this.providerId,
+                  provider: providerId,
                   pid: child?.pid,
                   configId: rejected.configId,
                   code: msg.error.code,
@@ -1357,7 +1357,7 @@ export class AcpAgentExecutor extends BaseExecutor {
 
         child.on("close", (code) => {
           acpTrace("close", {
-            provider: this.providerId,
+            provider: providerId,
             pid: child.pid,
             code,
             signal: child.signalCode,
