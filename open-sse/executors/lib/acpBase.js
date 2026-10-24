@@ -577,6 +577,8 @@ export class AcpAgentExecutor extends BaseExecutor {
 
     log?.info?.(tag, `${exe} ${args.join(" ")} → model=${model}, bin=${bin}, cwd=${workspaceCwd}`);
 
+    const providerId = this.providerId;
+    const clientVersion = this.config?.version || "1.0";
     const sseStream = new ReadableStream({
       async start(controller) {
         const enc = new TextEncoder();
@@ -606,13 +608,20 @@ export class AcpAgentExecutor extends BaseExecutor {
         // `start()` callback below runs with the stream as `this`.
         const sessionConnection = credentials?.connectionId || credentials?.connectionName;
         const sessionIdentity = sessionConnection
-          ? { provider: this.providerId, connection: sessionConnection, cwd: workspaceCwd, model }
+          ? {
+              provider: providerId,
+              connection: sessionConnection,
+              cwd: workspaceCwd,
+              model,
+              proxy: proxyOptions?.connectionProxyEnabled ? proxyOptions.connectionProxyUrl : "",
+              noProxy: proxyOptions?.connectionNoProxy || "",
+            }
           : null;
         const sessionKey = sessionIdentity
           ? acpSessionKey({
               ...sessionIdentity,
-              proxy: proxyOptions?.connectionProxyEnabled ? proxyOptions.connectionProxyUrl : "",
-              noProxy: proxyOptions?.connectionNoProxy || "",
+              proxy: sessionIdentity.proxy,
+              noProxy: sessionIdentity.noProxy,
             })
           : null;
         let pooled = null;
@@ -1393,7 +1402,7 @@ export class AcpAgentExecutor extends BaseExecutor {
         } else {
           sendRpc("initialize", {
             protocolVersion: 1,
-            clientInfo: { name: "9router", version: this.config?.version || "1.0" },
+            clientInfo: { name: "9router", version: clientVersion },
             capabilities: {},
           });
         }
