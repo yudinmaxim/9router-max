@@ -6,12 +6,15 @@ import path from "node:path";
 import {
   CLIENT_TOOLS_SERVER_NAME,
   buildClientToolsMcp,
+  cleanupClientToolState,
   clientToolDeclarations,
+  createClientToolState,
   detectClientToolName,
   extractClientToolResults,
   fromMcpToolName,
   toMcpToolName,
   unwrapClientToolArgs,
+  writeClientToolResults,
 } from "../../open-sse/executors/lib/acpClientTools.js";
 
 describe("client tool declarations", () => {
@@ -63,6 +66,47 @@ describe("buildClientToolsMcp", () => {
     expect(JSON.parse(envObj(seeded.env).ACP_CLIENT_TOOL_RESULTS)).toEqual({ ping: "pong" });
     const empty = buildClientToolsMcp([{ function: { name: "ping" } }], {});
     expect(envObj(empty.env).ACP_CLIENT_TOOL_RESULTS).toBeUndefined();
+  });
+
+  it("hands the results file to the bridge alongside the sink", () => {
+    const server = buildClientToolsMcp([{ function: { name: "read_file" } }], { read_file: "x" }, {
+      sink: "/tmp/state/calls.jsonl",
+      resultsFile: "/tmp/state/results.json",
+    });
+    const env = envObj(server.env);
+    expect(env.ACP_CLIENT_TOOL_RESULTS_FILE).toBe("/tmp/state/results.json");
+    // The env map stays as the spawn-time snapshot for a freshly spawned
+    // bridge — and for devin, which spawns per turn and never pools.
+    expect(JSON.parse(env.ACP_CLIENT_TOOL_RESULTS)).toEqual({ read_file: "x" });
+    const plain = buildClientToolsMcp([{ function: { name: "read_file" } }], {});
+    expect(envObj(plain.env).ACP_CLIENT_TOOL_RESULTS_FILE).toBeUndefined();
+  });
+});
+
+describe("per-session client tool state", () => {
+  it("keeps sink and results file in one seeded directory, removable as a unit", () => {
+    const state = createClientToolState({ read_file: "prior" });
+    expect(fs.existsSync(state.dir)).toBe(true);
+    expect(path.dirname(state.sink)).toBe(state.dir);
+    expect(path.dirname(state.resultsFile)).toBe(state.dir);
+    expect(JSON.parse(fs.readFileSync(state.resultsFile, "utf8"))).toEqual({ read_file: "prior" });
+    cleanupClientToolState(state);
+    expect(fs.existsSync(state.dir)).toBe(false);
+    cleanupClientToolState(state); // idempotent — teardown may run twice
+    cleanupClientToolState(null);
+  });
+
+  it("replaces results with every write, so a repeat call answers from the latest history", () => {
+    const state = createClientToolState({ a: "one" });
+    try {
+      writeClientToolResults(state.resultsFile, { a: "two" });
+      expect(JSON.parse(fs.readFileSync(state.resultsFile, "utf8"))).toEqual({ a: "two" });
+      writeClientToolResults(state.resultsFile, {});
+      expect(JSON.parse(fs.readFileSync(state.resultsFile, "utf8"))).toEqual({});
+      writeClientToolResults("", {}); // no file — a no-op, never a throw
+    } finally {
+      cleanupClientToolState(state);
+    }
   });
 });
 
@@ -221,6 +265,66 @@ describe("bridge script tools/call", () => {
       const parsed = replies.join("").trim().split("\n").map((l) => JSON.parse(l));
       const callReply = parsed.find((m) => m.id === 2);
       expect(callReply?.result?.content?.[0]?.text).toBe("(awaiting client tool_result)");
+    } finally {
+      child.kill();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("bridge script results on a pooled process", () => {
+  // The mechanism behind repeat MCP calls on a pooled session: the bridge
+  // process outlives the turn that spawned it, its env is frozen forever, so
+  // fresh results can only arrive through the file the executor rewrites —
+  // and the script must re-read that file on EVERY call, not at spawn.
+  it("answers from the file rewritten mid-life, and falls back to env when it is gone", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "acp-bridge-results-test-"));
+    const resultsFile = path.join(dir, "results.json");
+    fs.writeFileSync(resultsFile, JSON.stringify({}));
+    const server = buildClientToolsMcp([{ function: { name: "read_file" } }], { read_file: "env seed" }, {
+      resultsFile,
+    });
+    const child = spawn(server.command, server.args, {
+      env: { ...process.env, ...envObj(server.env) },
+    });
+    try {
+      const replies = [];
+      child.stdout.on("data", (d) => replies.push(String(d)));
+      const send = (obj) => child.stdin.write(JSON.stringify(obj) + "\n");
+      const call = (id) =>
+        send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "read_file", arguments: {} } });
+      // Replies must land strictly in order — each call is asserted before the
+      // next mutation, or the file would be rewritten under an unread call.
+      const waitFor = async (id) => {
+        const deadline = Date.now() + 5000;
+        for (;;) {
+          const raw = replies.join("").trim();
+          const parsed = raw ? raw.split("\n").map((l) => JSON.parse(l)) : [];
+          const hit = parsed.find((m) => m.id === id);
+          if (hit) return hit;
+          if (Date.now() > deadline) throw new Error(`no reply for id ${id}`);
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      };
+      const textOf = (reply) => reply?.result?.content?.[0]?.text;
+
+      send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+
+      // Turn 1's file is empty and wins over the env seed — the file is the
+      // per-turn source of truth, the env map only its spawn-time fallback.
+      call(2);
+      expect(textOf(await waitFor(2))).toBe("(awaiting client tool_result)");
+
+      // Turn 2's result lands while the process is still alive.
+      writeClientToolResults(resultsFile, { read_file: "file result" });
+      call(3);
+      expect(textOf(await waitFor(3))).toBe("file result");
+
+      // Missing file (dir removed under a stale bridge): env snapshot, not a
+      // crash and not a placeholder.
+      fs.unlinkSync(resultsFile);
+      call(4);
+      expect(textOf(await waitFor(4))).toBe("env seed");
     } finally {
       child.kill();
       fs.rmSync(dir, { recursive: true, force: true });

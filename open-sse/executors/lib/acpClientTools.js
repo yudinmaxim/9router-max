@@ -14,7 +14,12 @@
  *
  * Tool schemas travel in ACP_CLIENT_TOOLS, prior results in
  * ACP_CLIENT_TOOL_RESULTS — env rather than argv so results (arbitrary client
- * output, possibly large) never appear in a process listing.
+ * output, possibly large) never appear in a process listing. A pooled session
+ * re-uses its bridge process across turns, and a process env cannot change
+ * after spawn — so a result that arrives on turn 2 would never reach a bridge
+ * seeded on turn 1. The bridge therefore prefers a per-session results FILE
+ * (ACP_CLIENT_TOOL_RESULTS_FILE) that the executor rewrites on every turn;
+ * the env map stays as the spawn-time snapshot for freshly spawned bridges.
  */
 
 import fs from "node:fs";
@@ -29,7 +34,22 @@ import fs from "node:fs";
 import readline from "node:readline";
 const TOOLS = JSON.parse(process.env.ACP_CLIENT_TOOLS || "[]");
 const RESULTS = JSON.parse(process.env.ACP_CLIENT_TOOL_RESULTS || "{}");
+const RESULTS_FILE = process.env.ACP_CLIENT_TOOL_RESULTS_FILE || "";
 const SINK = process.env.ACP_CLIENT_TOOLS_SINK || "";
+// A pooled session keeps this process alive across turns while its env stays
+// frozen at spawn — the fresh per-turn map lives in the results file instead.
+function readResults(){
+  if (RESULTS_FILE) {
+    try {
+      const raw = fs.readFileSync(RESULTS_FILE, "utf8");
+      if (raw.trim()) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") return parsed;
+      }
+    } catch { /* missing/unreadable: fall back to the spawn-time env map */ }
+  }
+  return RESULTS;
+}
 const rl = readline.createInterface({ input: process.stdin });
 function send(o){ process.stdout.write(JSON.stringify(o) + "\\n"); }
 // codex-acp wraps MCP arguments in its internal envelope {server, tool,
@@ -61,7 +81,7 @@ rl.on("line", (line) => {
         process.stderr.write("[client-tools] sink write failed: " + e.message + "\\n");
       }
     }
-    const seeded = RESULTS[name];
+    const seeded = readResults()[name];
     const text = seeded !== undefined
       ? String(seeded)
       : "(awaiting client tool_result)";
@@ -88,11 +108,11 @@ function writeBridgeScript(scriptFile) {
  * executor drains this file.
  *
  * Lives in a fresh mkdtemp directory so concurrent turns cannot cross-read, and
- * is removed on cleanup.
+ * is removed on cleanup. Pooled executors use `createClientToolState` instead —
+ * same directory layout, but the dir is owned by the session, not the turn.
  */
 export function createToolCallSink() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "9router-acp-tools-"));
-  return path.join(dir, "calls.jsonl");
+  return createClientToolState().sink;
 }
 
 /**
@@ -132,6 +152,58 @@ export function cleanupToolCallSink(sink) {
   if (!sink) return;
   try {
     fs.rmSync(path.dirname(sink), { recursive: true, force: true });
+  } catch {
+    /* best effort; the OS reaps tmpdir */
+  }
+}
+
+/**
+ * Per-session client-tool state: sink and results file in one directory.
+ *
+ * A pooled session keeps its bridge process alive across turns, and that
+ * process reads both paths from its spawn-time env — a process env cannot
+ * change after spawn. The directory therefore must outlive any single turn:
+ * the pool entry holds it, reuse swaps back to it, and only the entry's
+ * disposal removes it. The results file doubles as the one channel a live
+ * bridge still re-reads (see `ACP_CLIENT_TOOL_RESULTS_FILE`), so each turn
+ * rewrites it with the results carried in that turn's history.
+ *
+ * @param {object} [resultMap] history-derived results to seed the file with
+ * @returns {{dir: string, sink: string, resultsFile: string}}
+ */
+export function createClientToolState(resultMap = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "9router-acp-tools-"));
+  const state = {
+    dir,
+    sink: path.join(dir, "calls.jsonl"),
+    resultsFile: path.join(dir, "results.json"),
+  };
+  writeClientToolResults(state.resultsFile, resultMap);
+  return state;
+}
+
+/**
+ * Replace the results file's content — the bridge re-reads it on every
+ * `tools/call`, so replacement (not merge) is what makes a repeat call answer
+ * from the latest history. A failure here costs one seeding round trip: the
+ * bridge falls back to its spawn-time env map.
+ */
+export function writeClientToolResults(resultsFile, resultMap = {}) {
+  if (!resultsFile) return;
+  try {
+    fs.writeFileSync(
+      resultsFile,
+      JSON.stringify(resultMap && typeof resultMap === "object" ? resultMap : {})
+    );
+  } catch {
+    /* best effort; readResults() falls back to the env snapshot */
+  }
+}
+
+export function cleanupClientToolState(state) {
+  if (!state?.dir) return;
+  try {
+    fs.rmSync(state.dir, { recursive: true, force: true });
   } catch {
     /* best effort; the OS reaps tmpdir */
   }
@@ -232,6 +304,10 @@ export function clientToolDeclarations(tools, prefix = "") {
  * @param {string} [options.prefix]        per-agent name prefix
  * @param {string} [options.scriptFile]
  * @param {string} [options.sink]          path the bridge records calls into
+ * @param {string} [options.resultsFile]   per-session results file the bridge
+ *                                         re-reads on every call — the channel
+ *                                         that keeps working when the process
+ *                                         is pooled and its env is frozen
  * @param {boolean} [options.envAsObject]  devin-only: object env instead of the
  *                                         array the ACP stdio variant wants
  */
@@ -240,6 +316,7 @@ export function buildClientToolsMcp(tools, resultMap, options = {}) {
     prefix = "",
     scriptFile = "9router-acp-client-tools.mjs",
     sink = "",
+    resultsFile = "",
     envAsObject = false,
   } = options;
   const declarations = clientToolDeclarations(tools, prefix);
@@ -249,6 +326,7 @@ export function buildClientToolsMcp(tools, resultMap, options = {}) {
     pairs.ACP_CLIENT_TOOL_RESULTS = JSON.stringify(resultMap);
   }
   if (sink) pairs.ACP_CLIENT_TOOLS_SINK = sink;
+  if (resultsFile) pairs.ACP_CLIENT_TOOL_RESULTS_FILE = resultsFile;
   const env = envAsObject
     ? pairs
     : Object.entries(pairs).map(([name, value]) => ({ name, value }));

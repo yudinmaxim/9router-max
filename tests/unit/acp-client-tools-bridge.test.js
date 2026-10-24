@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import os from "node:os";
 import fs from "node:fs";
+import path from "node:path";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
@@ -194,7 +195,14 @@ describe("ACP client-tool bridge: registration", () => {
     expect(bridge.env).toEqual([
       { name: "ACP_CLIENT_TOOLS", value: expect.any(String) },
       { name: "ACP_CLIENT_TOOLS_SINK", value: expect.stringContaining("9router-acp-tools-") },
+      // The sink's sibling: a pooled bridge keeps both paths from its spawn-time
+      // env, and the file is the channel its executor still rewrites per turn.
+      { name: "ACP_CLIENT_TOOL_RESULTS_FILE", value: expect.stringContaining("9router-acp-tools-") },
     ]);
+    // Same directory — one state dir per session, removed as a unit.
+    const sink = envObj(bridge.env).ACP_CLIENT_TOOLS_SINK;
+    const resultsFile = envObj(bridge.env).ACP_CLIENT_TOOL_RESULTS_FILE;
+    expect(path.dirname(resultsFile)).toBe(path.dirname(sink));
   });
 
   it("declares the client's tools with MCP names, not OpenAI names", async () => {

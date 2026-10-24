@@ -7,6 +7,7 @@ import {
   dropAcpSession,
   acquireAcpSession,
   clearAcpSessions,
+  cleanupAcpSessions,
   markAcpSessionDead,
 } from "../../open-sse/executors/lib/acpSessionPool.js";
 
@@ -64,5 +65,38 @@ describe("ACP session pool", () => {
     expect(getAcpSession("k")).toBeNull();
     expect(peekAcpSession("k")).toBeNull();
     expect(child.kill).toHaveBeenCalled();
+  });
+
+  it("runs a one-shot dispose hook on every path that drops an entry", () => {
+    // The hook carries the teardown of what the transport attached (the
+    // client-tool state dir a pooled bridge writes into). Too early and a live
+    // bridge records into a deleted dir; never and the dir leaks in /tmp —
+    // so every removal path must run it, and only once.
+    const disposed = [];
+    const mk = (n) => ({ onDispose: () => disposed.push(n) });
+
+    putAcpSession("peek-expired", mk(1), { ttl: 1, now: 0 });
+    expect(peekAcpSession("peek-expired")).toBeNull();
+    putAcpSession("get-expired", mk(2), { ttl: 1, now: 0 });
+    expect(getAcpSession("get-expired", 1000)).toBeNull();
+    putAcpSession("cleanup-expired", mk(3), { ttl: 1, now: 0 });
+    cleanupAcpSessions(1000);
+
+    putAcpSession("dropped", mk(4));
+    dropAcpSession("dropped");
+    dropAcpSession("dropped"); // already gone — never twice
+
+    putAcpSession("dead", mk(5));
+    markAcpSessionDead("dead");
+
+    // Replacing an entry abandons the old one — its attached state must not
+    // outlive it (a resumed session re-pools under the same key).
+    putAcpSession("replaced", mk(6));
+    putAcpSession("replaced", mk(7));
+
+    putAcpSession("cleared", mk(8));
+    clearAcpSessions(); // disposes what is still live: mk(7) and mk(8)
+
+    expect(disposed).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
   });
 });

@@ -78,14 +78,15 @@ import { ACP_PERMISSION_HEADER, ACP_PERMISSION_BODY_KEY, ACP_DEFAULTS_HEADER, AC
 import {
   CLIENT_TOOLS_SERVER_NAME,
   buildClientToolsMcp,
-  cleanupToolCallSink,
+  cleanupClientToolState,
   clientToolDeclarations,
-  createToolCallSink,
+  createClientToolState,
   detectClientToolName,
   drainToolCallSink,
   extractClientToolResults,
   fromMcpToolName,
   unwrapClientToolArgs,
+  writeClientToolResults,
 } from "./acpClientTools.js";
 
 const ACP_URL = "acp://stdio";
@@ -539,14 +540,19 @@ export class AcpAgentExecutor extends BaseExecutor {
     // verified live, cursor-agent reports a bridged call as
     // {title:"MCP: tool", rawInput:{}} with neither name nor arguments. The
     // bridge server is the only process that sees them, so it records calls in
-    // a per-request sink we drain.
-    let clientToolSink = clientTools.some((t) => t?.function?.name || t?.name)
-      ? createToolCallSink()
+    // a sink we drain. Both that sink and the results file live in one
+    // per-session state dir: a pooled bridge keeps these paths from its
+    // spawn-time env, so on reuse this request's fresh pair never reaches it
+    // and the swap happens in the reuse branch below.
+    let clientToolState = clientTools.some((t) => t?.function?.name || t?.name)
+      ? createClientToolState(clientToolResults)
       : null;
+    let clientToolSink = clientToolState?.sink || null;
     const clientToolsMcp = buildClientToolsMcp(clientTools, clientToolResults, {
       prefix: clientToolPrefix,
       scriptFile: this.acp.clientToolsScriptFile || "9router-acp-client-tools.mjs",
       sink: clientToolSink || "",
+      resultsFile: clientToolState?.resultsFile || "",
     });
     const knownClientTools = new Set(
       clientToolDeclarations(clientTools, clientToolPrefix).map((t) => t.name)
@@ -605,6 +611,9 @@ export class AcpAgentExecutor extends BaseExecutor {
         let releaseSession = null;
         // True once this turn stored its child in the pool (fresh session).
         let sessionPooledNow = false;
+        // True once `clientToolState` entered a pool entry — from then on the
+        // entry's `onDispose` hook owns the dir, not this turn's `finish()`.
+        let toolStatePooled = false;
         let child;
         let transport;
         const { cmd, args: spawnArgs, shell } = agentSpawnCommand(bin, args);
@@ -624,6 +633,20 @@ export class AcpAgentExecutor extends BaseExecutor {
           releaseSession = acquired.release;
           child = pooled.child;
           transport = pooled.transport;
+          if (clientToolState && pooled.toolState) {
+            // The live bridge was spawned on the session's first turn and its
+            // env is frozen at those paths — reuse sends no session/new, so
+            // this request's fresh pair would never be seen. Swap to the
+            // session's own sink/results file, drop whatever the previous turn
+            // left in the sink, and publish this turn's history results: the
+            // file is the one channel a live bridge still re-reads.
+            cleanupClientToolState(clientToolState);
+            clientToolState = pooled.toolState;
+            clientToolSink = clientToolState.sink;
+            toolStatePooled = true;
+            drainToolCallSink(clientToolSink);
+            writeClientToolResults(clientToolState.resultsFile, clientToolResults);
+          }
           acpTrace("reuse", { provider: this.providerId, pid: child.pid, sessionId: pooled.sessionId, ...proxyTrace });
         } else {
           child = spawn(cmd, spawnArgs, {
@@ -764,6 +787,17 @@ export class AcpAgentExecutor extends BaseExecutor {
           return true;
         };
 
+        /**
+         * End-of-turn teardown for the tool state. Once it entered a pool
+         * entry, deleting the dir here would break the bridge that still points
+         * at these paths — the entry's dispose hook removes it instead.
+         */
+        const releaseToolState = () => {
+          if (clientToolState && !toolStatePooled) cleanupClientToolState(clientToolState);
+          clientToolState = null;
+          clientToolSink = null;
+        };
+
         const finish = (error, finishReason = "stop", errorCode) => {
           if (finished) return;
           finished = true;
@@ -812,8 +846,7 @@ export class AcpAgentExecutor extends BaseExecutor {
               clearInterval(sinkPoll);
               sinkPoll = null;
             }
-            cleanupToolCallSink(clientToolSink);
-            clientToolSink = null;
+            releaseToolState();
             closeStream();
             return;
           }
@@ -838,8 +871,7 @@ export class AcpAgentExecutor extends BaseExecutor {
             clearInterval(sinkPoll);
             sinkPoll = null;
           }
-          cleanupToolCallSink(clientToolSink);
-          clientToolSink = null;
+          releaseToolState();
 
           closeStream();
         };
@@ -984,6 +1016,7 @@ export class AcpAgentExecutor extends BaseExecutor {
                 // currentAgentModel() over it answers "" and every reuse would
                 // re-pin a model the agent already sits on — a call some agents
                 // answer with -32602.
+                const toolStateForEntry = clientToolState;
                 putAcpSession(sessionKey, {
                   child,
                   transport,
@@ -991,7 +1024,15 @@ export class AcpAgentExecutor extends BaseExecutor {
                   catalog,
                   cwd: workspaceCwd,
                   currentModel: resolvedModelId || current,
+                  // The dir the live bridge (spawned this turn) reads and
+                  // writes: it stays with the entry for as long as the session
+                  // is pooled, and the hook is what finally removes it.
+                  toolState: toolStateForEntry,
+                  onDispose: toolStateForEntry
+                    ? () => cleanupClientToolState(toolStateForEntry)
+                    : undefined,
                 });
+                toolStatePooled = Boolean(toolStateForEntry);
                 sessionPooledNow = true;
                 acpTrace("pooled", { provider: this.providerId, pid: child.pid, sessionId });
               }

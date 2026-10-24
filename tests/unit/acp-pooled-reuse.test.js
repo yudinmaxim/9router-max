@@ -18,12 +18,28 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+const { spawnMock, toolStates } = vi.hoisted(() => ({ spawnMock: vi.fn(), toolStates: [] }));
 
 vi.mock("node:child_process", () => ({
   spawn: (...args) => spawnMock(...args),
 }));
+
+// The executor's only window into the state dir it hands the pool. The mock
+// wraps (never replaces) — the bridge script and every other export stay real,
+// the array just records what each turn created and when.
+vi.mock("open-sse/executors/lib/acpClientTools.js", async (importOriginal) => {
+  const mod = await importOriginal();
+  return {
+    ...mod,
+    createClientToolState: (resultMap) => {
+      const state = mod.createClientToolState(resultMap);
+      toolStates.push(state);
+      return state;
+    },
+  };
+});
 
 const { default: CursorAcpExecutor } = await import("open-sse/executors/cursor-acp.js");
 const { clearAcpSessions } = await import("open-sse/executors/lib/acpSessionPool.js");
@@ -152,6 +168,7 @@ const sseFrames = (acc) =>
 
 beforeEach(() => {
   spawnMock.mockReset();
+  toolStates.length = 0;
   clearAcpSessions();
 });
 
@@ -264,6 +281,103 @@ describe("pooled session reuse", () => {
     const resume = written(second).find((m) => m.method === "session/resume");
     expect(resume.params.sessionId).toBe("fake-session");
     expect(sseFrames(acc).at(-1).choices[0].finish_reason).toBe("stop");
+    expect(acc).not.toContain('"error"');
+  });
+});
+
+describe("pooled client-tool state", () => {
+  // What this whole fix is about: the bridge process is spawned with the state
+  // dir in its env and never re-reads that env — so on reuse the turn must
+  // reuse the session's OWN sink/results file, not the per-request pair that
+  // dies with the turn. Each test runs with `tools` so a bridge is registered.
+  const TOOL = { function: { name: "read_file", description: "r", parameters: { type: "object", properties: {} } } };
+  const toolsBody = (messages) => ({ body: { messages, tools: [TOOL] } });
+  const firstTurnMessages = [{ role: "user", content: "hi" }];
+  const historyWithResult = [
+    ...firstTurnMessages,
+    { role: "assistant", tool_calls: [{ id: "t1", type: "function", function: { name: "read_file", arguments: '{"path":"/tmp/a"}' } }] },
+    { role: "tool", tool_call_id: "t1", content: "REAL RESULT" },
+  ];
+
+  it("keeps the session's state dir alive across turns and reseeds it from each turn's history", async () => {
+    const child = makeFakeChild();
+    const first = await runTurn(child, toolsBody(firstTurnMessages));
+    expect(sseFrames(first).at(-1).choices[0].finish_reason).toBe("stop");
+    expect(toolStates).toHaveLength(1);
+    const session = toolStates[0];
+    // finish() must not delete what the still-live bridge writes into.
+    expect(fs.existsSync(session.dir)).toBe(true);
+
+    // What the previous turn left in the sink must not resurface as a call.
+    fs.appendFileSync(session.sink, JSON.stringify({ name: "read_file", arguments: { stale: true } }) + "\n");
+
+    const second = await runTurn(child, toolsBody(historyWithResult));
+
+    expect(spawnMock).toHaveBeenCalledTimes(1); // one child for both turns
+    expect(toolStates).toHaveLength(2); // …each turn built its own pair
+    // The turn-2 pair never reached the bridge (no session/new on reuse) and is
+    // discarded; the swap moved the turn onto the session's surviving pair.
+    expect(fs.existsSync(toolStates[1].dir)).toBe(false);
+    expect(fs.existsSync(session.dir)).toBe(true);
+    // The file the live bridge re-reads now carries THIS turn's results…
+    expect(JSON.parse(fs.readFileSync(session.resultsFile, "utf8"))).toEqual({ read_file: "REAL RESULT" });
+    // …and the stale sink was drained before the prompt went out.
+    expect(fs.readFileSync(session.sink, "utf8")).toBe("");
+    expect(sseFrames(second).at(-1).choices[0].finish_reason).toBe("stop");
+    expect(second).not.toContain('"error"');
+  });
+
+  it("surfaces a bridged call recorded in the session's own sink during a reused turn", async () => {
+    const child = makeFakeChild();
+    await runTurn(child, toolsBody(firstTurnMessages));
+    expect(toolStates).toHaveLength(1);
+    const session = toolStates[0];
+
+    // Stand-in for the live bridge: it records the call into the session's sink
+    // while the prompt runs, and the prompt answer comes back late so the 50ms
+    // sink poll is what ends the turn — exactly how a real tool call arrives.
+    const orig = child.stdin.write;
+    child.stdin.write = (data) => {
+      const msg = JSON.parse(String(data).trim());
+      if (msg.method === "session/prompt") {
+        child.writes.push(String(data));
+        fs.appendFileSync(session.sink, JSON.stringify({ name: "read_file", arguments: { path: "/tmp/x" } }) + "\n");
+        setTimeout(() => {
+          child.stdout.emit(
+            "data",
+            Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } }) + "\n")
+          );
+        }, 200);
+        return true;
+      }
+      return orig.call(child.stdin, data);
+    };
+
+    const second = await runTurn(child, toolsBody(firstTurnMessages));
+
+    const frames = sseFrames(second);
+    expect(frames.at(-1).choices[0].finish_reason).toBe("tool_calls");
+    const call = frames.find((f) => f.choices[0].delta.tool_calls)?.choices[0].delta.tool_calls?.[0];
+    expect(call?.function?.name).toBe("read_file");
+    expect(JSON.parse(call.function.arguments)).toEqual({ path: "/tmp/x" });
+    // The turn ended on a tool call — still a live pooled session, dir intact.
+    expect(fs.existsSync(session.dir)).toBe(true);
+  });
+
+  it("disposes the replaced entry's state when a dead child forces a resume", async () => {
+    const first = makeFakeChild();
+    await runTurn(first, toolsBody(firstTurnMessages));
+    first.exitCode = 1;
+
+    const second = makeFakeChild();
+    const acc = await runTurn(second, toolsBody(firstTurnMessages));
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(toolStates).toHaveLength(2);
+    // Re-pooling under the same key replaced the entry — the old entry's hook
+    // removed its dir; the resumed session's own state stays until disposal.
+    expect(fs.existsSync(toolStates[0].dir)).toBe(false);
+    expect(fs.existsSync(toolStates[1].dir)).toBe(true);
     expect(acc).not.toContain('"error"');
   });
 });
