@@ -548,6 +548,14 @@ export class AcpAgentExecutor extends BaseExecutor {
       ? createClientToolState(clientToolResults)
       : null;
     let clientToolSink = clientToolState?.sink || null;
+    if (clientToolState) {
+      acpTrace("client-tools-state-created", {
+        provider: this.providerId,
+        sink: clientToolState.sink,
+        resultsFile: clientToolState.resultsFile,
+        seededResults: Object.keys(clientToolResults).length,
+      });
+    }
     const clientToolsMcp = buildClientToolsMcp(clientTools, clientToolResults, {
       prefix: clientToolPrefix,
       scriptFile: this.acp.clientToolsScriptFile || "9router-acp-client-tools.mjs",
@@ -644,8 +652,17 @@ export class AcpAgentExecutor extends BaseExecutor {
             clientToolState = pooled.toolState;
             clientToolSink = clientToolState.sink;
             toolStatePooled = true;
-            drainToolCallSink(clientToolSink);
+            const staleCalls = drainToolCallSink(clientToolSink);
             writeClientToolResults(clientToolState.resultsFile, clientToolResults);
+            acpTrace("client-tools-state-reused", {
+              provider: this.providerId,
+              pid: child.pid,
+              sessionId: pooled.sessionId,
+              sink: clientToolSink,
+              resultsFile: clientToolState.resultsFile,
+              drainedCalls: staleCalls.length,
+              seededResults: Object.keys(clientToolResults).length,
+            });
           }
           acpTrace("reuse", { provider: this.providerId, pid: child.pid, sessionId: pooled.sessionId, ...proxyTrace });
         } else {
@@ -781,6 +798,14 @@ export class AcpAgentExecutor extends BaseExecutor {
           const calls = drainToolCallSink(clientToolSink);
           if (!calls.length) return false;
           const call = calls[0];
+          acpTrace("client-tools-sink-call", {
+            provider: this.providerId,
+            pid: child.pid,
+            sessionId,
+            name: call.name,
+            queuedCalls: calls.length,
+            seededResults: Object.keys(clientToolResults).length,
+          });
           toolUseEmitted = true;
           emitToolUse(fromMcpToolName(call.name, clientToolPrefix), call.arguments, `call_${Date.now()}`);
           finish(null, "tool_calls");
@@ -1029,12 +1054,28 @@ export class AcpAgentExecutor extends BaseExecutor {
                   // is pooled, and the hook is what finally removes it.
                   toolState: toolStateForEntry,
                   onDispose: toolStateForEntry
-                    ? () => cleanupClientToolState(toolStateForEntry)
+                    ? () => {
+                        acpTrace("client-tools-state-disposed", {
+                          provider: this.providerId,
+                          pid: child.pid,
+                          sessionId,
+                          sink: toolStateForEntry.sink,
+                          resultsFile: toolStateForEntry.resultsFile,
+                        });
+                        cleanupClientToolState(toolStateForEntry);
+                      }
                     : undefined,
                 });
                 toolStatePooled = Boolean(toolStateForEntry);
                 sessionPooledNow = true;
-                acpTrace("pooled", { provider: this.providerId, pid: child.pid, sessionId });
+                acpTrace("pooled", {
+                  provider: this.providerId,
+                  pid: child.pid,
+                  sessionId,
+                  clientTools: Boolean(toolStateForEntry),
+                  sink: toolStateForEntry?.sink,
+                  resultsFile: toolStateForEntry?.resultsFile,
+                });
               }
 
               const refuseSelfRoute = () => finish(
