@@ -26,6 +26,7 @@ import { updateProviderCredentials, checkAndRefreshToken } from "../services/tok
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
+import { enforceStepBudget } from "../services/stepBudget.js";
 import { buildMcpProxyTargets } from "@/lib/mcp/proxyTargets.js";
 import { buildMcpToolBridge } from "@/lib/mcp/toolBridge.js";
 
@@ -95,6 +96,12 @@ export async function handleChat(request, clientRawRequest = null) {
   const keyAccess = await getKeyAccessContext(request);
   const keyAccessDenied = await enforceKeyAccess(keyAccess, modelStr);
   if (keyAccessDenied) return keyAccessDenied;
+
+  // Step budget: one client request is one step, spent here — after the access
+  // check and before combo expansion or any credential lookup, so a refused
+  // request costs nothing downstream. Off unless a budget is declared.
+  const stepBudgetDenied = await enforceStepBudget({ request, keyAccess, modelStr });
+  if (stepBudgetDenied) return stepBudgetDenied;
 
   // Bypass naming/warmup requests before combo rotation to avoid wasting rotation slots
   const userAgent = request?.headers?.get("user-agent") || "";
