@@ -45,6 +45,7 @@ vi.mock("open-sse/executors/lib/acpClientTools.js", async (importOriginal) => {
 
 const { default: CursorAcpExecutor } = await import("open-sse/executors/cursor-acp.js");
 const { clearAcpSessions } = await import("open-sse/executors/lib/acpSessionPool.js");
+const { buildPromptText } = await import("open-sse/executors/lib/acpCommon.js");
 
 // cursor-agent's session/new shape: `models` carries the current id plus the
 // catalog, which is what a pooled entry later stores as a bare id list.
@@ -480,5 +481,44 @@ describe("lifecycle trace identity", () => {
     // No conversation identity means no pooling — a new child every turn.
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(sseFrames(acc2).at(-1).choices[0].finish_reason).toBe("stop");
+  });
+});
+
+describe("buildPromptText with tool definitions", () => {
+  it("prepends tool definitions so the model knows required fields", () => {
+    const tools = [
+      {
+        function: {
+          name: "read_file",
+          description: "Read a file",
+          parameters: {
+            type: "object",
+            properties: {
+              filePath: { type: "string", description: "Absolute path" },
+            },
+            required: ["filePath"],
+          },
+        },
+      },
+    ];
+    const prompt = buildPromptText([{ role: "user", content: "hi" }], tools);
+    expect(prompt).toContain("Tool definitions");
+    expect(prompt).toContain("read_file");
+    expect(prompt).toContain("Required fields: filePath");
+  });
+
+  it("includes tool definitions before the conversation", () => {
+    const tools = [
+      { function: { name: "write_file", description: "Write a file", parameters: { type: "object", properties: { path: { type: "string" } } } } },
+    ];
+    const prompt = buildPromptText(
+      [{ role: "assistant", content: "ok" }],
+      tools
+    );
+    const defIdx = prompt.indexOf("Tool definitions");
+    const asstIdx = prompt.indexOf("[Assistant]");
+    expect(defIdx).toBeGreaterThan(-1);
+    expect(asstIdx).toBeGreaterThan(-1);
+    expect(defIdx).toBeLessThan(asstIdx);
   });
 });

@@ -107,8 +107,37 @@ export function resolveWorkspaceCwd(body) {
 
 // Inline the whole conversation so the model has full context, including
 // prior tool_calls / tool_results so it can continue after a client round-trip.
-export function buildPromptText(messages) {
+/**
+ * Build a text prompt for ACP agents from an OpenAI-shaped message array.
+ *
+ * @param {Array} messages       the messages array
+ * @param {Array} [toolDefs]     optional tool definitions from `body.tools`
+ *   — their JSON schemas are prepended so the model knows which fields each
+ *   tool expects (e.g. `read` needs `filePath`). Without this the model
+ *   guesses and often produces empty objects.
+ */
+export function buildPromptText(messages, toolDefs = []) {
   const lines = [];
+
+  // ── Tool definitions (prepended so the model sees them first) ──────────
+  if (toolDefs.length) {
+    lines.push(
+      "[Tool definitions]\n" +
+      toolDefs
+        .filter((t) => t?.function?.name)
+        .map((t) => {
+          const f = t.function;
+          const schema = f.parameters || f.input_schema || { type: "object", properties: {} };
+          return `- ${f.name}: ${f.description || ""}${
+            schema.properties
+              ? "  Required fields: " + Object.keys(schema.properties).join(", ")
+              : ""
+          }`;
+        })
+        .join("\n")
+    );
+  }
+
   for (const m of messages) {
     const role = String(m.role || "user");
     let text = "";

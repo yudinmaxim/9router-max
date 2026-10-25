@@ -454,7 +454,10 @@ export class AcpAgentExecutor extends BaseExecutor {
     const guardedBody = stripHistoryForContext(b, contextWindow);
     if (guardedBody !== b) log?.debug?.(tag, `trimmed ACP history for ${model}`);
     const messages = extractMessages(guardedBody);
-    const promptText = buildPromptText(messages);
+    // Client tools the caller sent — needed for prompt context so the model
+    // knows which fields each tool expects (e.g. `read` needs `filePath`).
+    const clientTools = Array.isArray(b.tools) ? b.tools.filter(Boolean) : [];
+    const promptText = buildPromptText(messages, clientTools);
     const workspaceCwd = resolveWorkspaceCwd(b);
     // Resolved here rather than inside the stream's start(), which runs with the
     // stream as `this`.
@@ -536,7 +539,6 @@ export class AcpAgentExecutor extends BaseExecutor {
     // something the caller never declared would misreport the call back, so
     // the prefix stays empty unless the agent forces one.
     const clientToolPrefix = this.acp.clientToolPrefix || "";
-    const clientTools = Array.isArray(b.tools) ? b.tools.filter(Boolean) : [];
     const clientToolResults = extractClientToolResults(messages, { prefix: clientToolPrefix });
     // ACP carries no structured field for which MCP tool an agent is invoking —
     // verified live, cursor-agent reports a bridged call as
