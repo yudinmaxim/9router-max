@@ -88,6 +88,7 @@ import {
   fromMcpToolName,
   unwrapClientToolArgs,
   hasToolArgs,
+  coerceToolArgs,
   writeClientToolResults,
 } from "./acpClientTools.js";
 
@@ -808,7 +809,12 @@ export class AcpAgentExecutor extends BaseExecutor {
         let sinkPoll = null;
         const pendingClientTools = new Map(); // toolCallId → original tool name
         const emitToolUse = (toolName, args, toolCallId) => {
-          const argsStr = typeof args === "string" ? args : JSON.stringify(args ?? {});
+          // The model behind the agent may still answer a declared integer with
+          // "1.0"; the caller's own validator rejects that outright. Repair the
+          // payload against the schema the caller supplied, which only the
+          // bridge still has at this point.
+          const coerced = coerceToolArgs(clientTools, toolName, args);
+          const argsStr = typeof coerced === "string" ? coerced : JSON.stringify(coerced ?? {});
           ensureRole();
           chunk({
             tool_calls: [

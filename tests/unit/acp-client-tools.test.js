@@ -13,6 +13,7 @@ import {
   extractClientToolResults,
   fromMcpToolName,
   hasToolArgs,
+  coerceToolArgs,
   toMcpToolName,
   unwrapClientToolArgs,
   writeClientToolResults,
@@ -183,6 +184,91 @@ describe("hasToolArgs", () => {
     expect(hasToolArgs([1, 2])).toBe(true);
     // A non-JSON string is real content — forward it rather than drop it.
     expect(hasToolArgs("just text")).toBe(true);
+  });
+});
+
+describe("coerceToolArgs", () => {
+  // Live failure: a free OpenCode model called the caller's own `read` with
+  // {"offset":"1.0","limit":"90.0"} and the caller answered
+  // "SchemaError(Expected number | undefined, got "1.0")". The bridge is the
+  // last place holding the caller's schema, so it repairs the payload.
+  const READ = [
+    {
+      type: "function",
+      function: {
+        name: "read",
+        parameters: {
+          type: "object",
+          properties: {
+            filePath: { type: "string" },
+            offset: { type: "integer" },
+            limit: { type: "integer" },
+            flag: { type: "boolean" },
+            mode: { type: "string" },
+          },
+          required: ["filePath"],
+        },
+      },
+    },
+  ];
+
+  it("types numeric strings back into numbers", () => {
+    expect(
+      coerceToolArgs(READ, "read", {
+        filePath: "/tmp/a.ts",
+        offset: "1.0",
+        limit: "90.0",
+      })
+    ).toEqual({ filePath: "/tmp/a.ts", offset: 1, limit: 90 });
+  });
+
+  it("coerces booleans and leaves declared strings alone", () => {
+    expect(coerceToolArgs(READ, "read", { filePath: "/a", flag: "true", mode: "42" })).toEqual({
+      filePath: "/a",
+      flag: true,
+      mode: "42",
+    });
+  });
+
+  it("keeps a JSON string input a JSON string output", () => {
+    const out = coerceToolArgs(READ, "read", '{"filePath":"/a","offset":"1.0"}');
+    expect(typeof out).toBe("string");
+    expect(JSON.parse(out)).toEqual({ filePath: "/a", offset: 1 });
+  });
+
+  it("refuses to round a fractional value into an integer field", () => {
+    // Silently turning "1.5" into 1 would read the wrong line of the file.
+    expect(coerceToolArgs(READ, "read", { filePath: "/a", offset: "1.5" })).toEqual({ filePath: "/a", offset: "1.5" });
+    // A number|integer union may take the float.
+    const loose = [{ function: { name: "read", parameters: { properties: { offset: { type: ["number", "integer"] } } } } }];
+    expect(coerceToolArgs(loose, "read", { offset: "1.5" })).toEqual({ offset: 1.5 });
+  });
+
+  it("forwards anything it cannot prove", () => {
+    // Not a number, not a boolean, unknown field, unknown tool, no schema.
+    expect(coerceToolArgs(READ, "read", { filePath: "/a", offset: "abc", limit: "", nope: "1" })).toEqual({
+      filePath: "/a",
+      offset: "abc",
+      limit: "",
+      nope: "1",
+    });
+    expect(coerceToolArgs(READ, "unknown_tool", { offset: "1" })).toEqual({ offset: "1" });
+    expect(coerceToolArgs([], "read", { offset: "1" })).toEqual({ offset: "1" });
+    expect(coerceToolArgs([{ function: { name: "read" } }], "read", { offset: "1" })).toEqual({ offset: "1" });
+    expect(coerceToolArgs(READ, "read", "not json")).toBe("not json");
+    expect(coerceToolArgs(READ, "read", null)).toBe(null);
+    expect(coerceToolArgs(READ, "read", [1, 2])).toEqual([1, 2]);
+  });
+
+  it("does not mutate the caller's object", () => {
+    const args = { filePath: "/a", offset: "1.0" };
+    coerceToolArgs(READ, "read", args);
+    expect(args).toEqual({ filePath: "/a", offset: "1.0" });
+  });
+
+  it("reads the Claude tool shape", () => {
+    const claude = [{ name: "read", input_schema: { properties: { offset: { type: "integer" } } } }];
+    expect(coerceToolArgs(claude, "read", { offset: "1.0" })).toEqual({ offset: 1 });
   });
 });
 

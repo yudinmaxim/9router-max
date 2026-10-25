@@ -79,6 +79,7 @@ import {
   fromMcpToolName,
   unwrapClientToolArgs,
   hasToolArgs,
+  coerceToolArgs,
 } from "./lib/acpClientTools.js";
 
 const DEVIN_CLIENT_TOOL_PREFIX = "mcp_";
@@ -346,7 +347,10 @@ export class DevinCliExecutor extends BaseExecutor {
           return true;
         };
         const emitToolUse = (toolName, args, toolCallId) => {
-          const argsStr = typeof args === "string" ? args : JSON.stringify(args ?? {});
+          // Same repair as acpBase: a model behind the agent may answer a
+          // declared integer with "1.0", which the caller's validator rejects.
+          const coerced = coerceToolArgs(clientTools, toolName, args);
+          const argsStr = typeof coerced === "string" ? coerced : JSON.stringify(coerced ?? {});
           if (!roleEmitted) {
             emit(
               `data: ${JSON.stringify({

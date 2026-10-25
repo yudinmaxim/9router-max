@@ -42,6 +42,26 @@ const READ_FILE = {
   },
 };
 
+// Live failure this guards end to end: the model behind opencode-acp called the
+// caller's own `read` with {"offset":"1.0","limit":"90.0"} and the caller
+// rejected it — "SchemaError(Expected number | undefined, got "1.0")".
+const READ_NUMBERED = {
+  type: "function",
+  function: {
+    name: "read",
+    description: "Read a file",
+    parameters: {
+      type: "object",
+      properties: {
+        filePath: { type: "string" },
+        offset: { type: "integer" },
+        limit: { type: "integer" },
+      },
+      required: ["filePath"],
+    },
+  },
+};
+
 // ACP stdio servers carry env as an array of {name, value} — cursor validates
 // the stdio variant of the mcpServers union and rejects an object env.
 const envObj = (env) =>
@@ -265,6 +285,19 @@ describe("ACP client-tool bridge: the sink is the source of truth", () => {
     expect(calls[0].name).toBe("read_file");
     expect(JSON.parse(calls[0].arguments)).toEqual({ path: "/tmp/live.txt" });
     expect(frames(acc).at(-1).choices[0].finish_reason).toBe("tool_calls");
+  });
+
+  it("coerces numbers quoted as strings by the model on the sink path", async () => {
+    // The agent's model reported the caller's `read` with "1.0"/"90.0"; the
+    // bridge knows the declared types and must hand the caller real numbers.
+    const { acc } = await runExecute({
+      bridgeCalls: [{ name: "read", arguments: { filePath: "/tmp/a.ts", offset: "1.0", limit: "90.0" } }],
+      updates: [{ sessionUpdate: "tool_call", toolCallId: "call_1", status: "pending", title: "MCP: tool", rawInput: {} }],
+      body: { tools: [READ_NUMBERED] },
+    });
+    const calls = toolCallFrames(acc);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0].arguments)).toEqual({ filePath: "/tmp/a.ts", offset: 1, limit: 90 });
   });
 
   it("ignores the agent's own tool when the sink is empty", async () => {

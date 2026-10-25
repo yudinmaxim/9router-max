@@ -303,6 +303,80 @@ function unwrapClientToolEnvelope(value) {
 }
 
 /**
+ * Coerce bridged tool arguments to the types the caller declared.
+ *
+ * A bridged tool's schema reaches the agent verbatim, but the model behind the
+ * agent does not always honour it: verified live, a free OpenCode model called
+ * the caller's own `read` with `{"offset":"1.0","limit":"90.0"}` — numbers
+ * quoted as strings — and the caller's validator rejected the call outright
+ * ("SchemaError(Expected number | undefined, got "1.0")"). The bridge is the
+ * last place that still knows both sides, so it repairs the payload here.
+ *
+ * Only string→declared-scalar coercions that parse exactly are applied, and
+ * only where the schema actually declares that scalar type. A value the schema
+ * declares as `integer` keeps its fractional part intact (so "1.5" is left
+ * alone rather than silently rounded), and anything that does not parse is
+ * forwarded untouched for the caller to judge.
+ *
+ * @param {Array} tools   the caller's `body.tools` (OpenAI or Claude shape)
+ * @param {string} name   the tool being called, in the caller's own spelling
+ * @param {object|string} args arguments as an object or JSON string
+ * @returns the arguments, coerced when safe — same shape as they came in
+ */
+export function coerceToolArgs(tools, name, args) {
+  const props = schemaProperties(tools, name);
+  if (!props) return args;
+
+  let obj = args;
+  const asString = typeof obj === "string";
+  if (asString) {
+    try {
+      obj = JSON.parse(obj);
+    } catch {
+      return args;
+    }
+  }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return args;
+
+  let changed = false;
+  const out = { ...obj };
+  for (const [key, value] of Object.entries(out)) {
+    if (typeof value !== "string") continue;
+    const spec = props[key];
+    if (!spec) continue;
+    const types = new Set([spec.type].flat().filter(Boolean));
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    if (types.has("number") || types.has("integer")) {
+      const n = Number(trimmed);
+      if (!Number.isFinite(n)) continue;
+      // An integer-typed field must not silently lose a fractional part.
+      if (types.has("integer") && !types.has("number") && !Number.isInteger(n)) continue;
+      out[key] = n;
+      changed = true;
+    } else if (types.has("boolean") && !types.has("string")) {
+      if (trimmed !== "true" && trimmed !== "false") continue;
+      out[key] = trimmed === "true";
+      changed = true;
+    }
+  }
+  if (!changed) return args;
+  return asString ? JSON.stringify(out) : out;
+}
+
+/** Look up a tool's declared properties, tolerating OpenAI and Claude shapes. */
+function schemaProperties(tools, name) {
+  for (const t of tools || []) {
+    const f = t?.function || t;
+    if (!f || f.name !== name) continue;
+    const schema = f.parameters || f.inputSchema || f.input_schema;
+    const props = schema?.properties;
+    if (props && typeof props === "object") return props;
+  }
+  return null;
+}
+
+/**
  * OpenAI tools ([{type:"function",function:{name,description,parameters}}]) →
  * MCP declarations ([{name,description,inputSchema}]).
  */
