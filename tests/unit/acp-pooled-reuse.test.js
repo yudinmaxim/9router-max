@@ -504,7 +504,57 @@ describe("buildPromptText with tool definitions", () => {
     const prompt = buildPromptText([{ role: "user", content: "hi" }], tools);
     expect(prompt).toContain("Tool definitions");
     expect(prompt).toContain("read_file");
-    expect(prompt).toContain("Required fields: filePath");
+    // The field name alone is not enough — the type has to be spelled out, and
+    // a required field must not carry the optional marker.
+    expect(prompt).toContain("args: { filePath: string }");
+    expect(prompt).not.toContain("filePath?");
+  });
+
+  it("types every field and marks optional ones, so numbers are not quoted", async () => {
+    // Live failure this guards: a free OpenCode model called the caller's own
+    // `read` with {"offset":"1.0","limit":"90.0"} and the caller rejected it —
+    // "SchemaError(Expected number | undefined, got "1.0")". The names were
+    // right; only the types were missing from the prompt.
+    const tools = [
+      {
+        type: "function",
+        function: {
+          name: "read",
+          description: "Read a file",
+          parameters: {
+            type: "object",
+            properties: {
+              filePath: { type: "string" },
+              offset: { type: "integer" },
+              limit: { type: "integer" },
+              flags: { type: ["string", "null"] },
+            },
+            required: ["filePath"],
+          },
+        },
+      },
+    ];
+    const prompt = buildPromptText([{ role: "user", content: "read it" }], tools);
+    expect(prompt).toContain("filePath: string");
+    expect(prompt).toContain("offset?: integer");
+    expect(prompt).toContain("limit?: integer");
+    // A union type is rendered in full rather than dropped.
+    expect(prompt).toContain("flags?: string|null");
+    expect(prompt).toContain("numbers unquoted");
+  });
+
+  it("accepts the Claude tool shape too", () => {
+    // Callers send `{name, description, input_schema}`; reading only the OpenAI
+    // shape silently drops every field and the model is left guessing again.
+    const tools = [{ name: "read", description: "Read", input_schema: { properties: { filePath: { type: "string" } }, required: ["filePath"] } }];
+    const prompt = buildPromptText([{ role: "user", content: "hi" }], tools);
+    expect(prompt).toContain("args: { filePath: string }");
+  });
+
+  it("renders a name-only entry when the tool declares no parameters", () => {
+    const prompt = buildPromptText([{ role: "user", content: "hi" }], [{ function: { name: "ping", description: "No args" } }]);
+    expect(prompt).toContain("- ping: No args");
+    expect(prompt).not.toContain("args:");
   });
 
   it("includes tool definitions before the conversation", () => {

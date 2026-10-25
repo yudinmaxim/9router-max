@@ -105,6 +105,29 @@ export function resolveWorkspaceCwd(body) {
 
 // ─── Multi-turn message → single prompt builder ─────────────────────────────
 
+/**
+ * Render one tool's parameter schema as a compact, typed signature line.
+ *
+ * Listing bare field names is not enough. Live, a free OpenCode model called
+ * the caller's `read` with `{"offset":"1.0","limit":"90.0"}` — the names were
+ * right, the types were not — and the caller rejected it:
+ * "SchemaError(Expected number | undefined, got \"1.0\")". A model composing
+ * arguments from plain text only gets the types right when they are spelled
+ * out, so each field carries its declared JSON Schema type and `?` marks the
+ * optional ones.
+ */
+function renderToolSignature(name, description, schema) {
+  const props = (schema && typeof schema.properties === "object" && schema.properties) || null;
+  const required = new Set(Array.isArray(schema?.required) ? schema.required : []);
+  const head = `- ${name}${description ? `: ${description}` : ""}`;
+  if (!props || !Object.keys(props).length) return head;
+  const fields = Object.entries(props).map(([field, spec]) => {
+    const type = [spec?.type].flat().filter(Boolean).join("|") || "any";
+    return `${field}${required.has(field) ? "" : "?"}: ${type}`;
+  });
+  return `${head}\n  args: { ${fields.join(", ")} }  (numbers unquoted)`;
+}
+
 // Inline the whole conversation so the model has full context, including
 // prior tool_calls / tool_results so it can continue after a client round-trip.
 /**
@@ -113,29 +136,27 @@ export function resolveWorkspaceCwd(body) {
  * @param {Array} messages       the messages array
  * @param {Array} [toolDefs]     optional tool definitions from `body.tools`
  *   — their JSON schemas are prepended so the model knows which fields each
- *   tool expects (e.g. `read` needs `filePath`). Without this the model
- *   guesses and often produces empty objects.
+ *   tool expects and of what type (e.g. `read` needs `filePath: string` and an
+ *   integer `offset`). Without this the model guesses and often produces empty
+ *   objects or numbers quoted as strings.
  */
 export function buildPromptText(messages, toolDefs = []) {
   const lines = [];
 
   // ── Tool definitions (prepended so the model sees them first) ──────────
   if (toolDefs.length) {
-    lines.push(
-      "[Tool definitions]\n" +
-      toolDefs
-        .filter((t) => t?.function?.name)
-        .map((t) => {
-          const f = t.function;
-          const schema = f.parameters || f.input_schema || { type: "object", properties: {} };
-          return `- ${f.name}: ${f.description || ""}${
-            schema.properties
-              ? "  Required fields: " + Object.keys(schema.properties).join(", ")
-              : ""
-          }`;
-        })
-        .join("\n")
-    );
+    const rendered = toolDefs
+      .map((t) => {
+        const f = t?.function || t;
+        if (!f?.name) return null;
+        return renderToolSignature(
+          f.name,
+          f.description || "",
+          f.parameters || f.input_schema || f.inputSchema
+        );
+      })
+      .filter(Boolean);
+    if (rendered.length) lines.push(`[Tool definitions]\n${rendered.join("\n")}`);
   }
 
   for (const m of messages) {
