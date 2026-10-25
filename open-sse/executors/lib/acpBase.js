@@ -87,6 +87,7 @@ import {
   extractClientToolResults,
   fromMcpToolName,
   unwrapClientToolArgs,
+  hasToolArgs,
   writeClientToolResults,
 } from "./acpClientTools.js";
 
@@ -1286,7 +1287,7 @@ export class AcpAgentExecutor extends BaseExecutor {
                     pendingClientTools.delete(tcId);
                     return;
                   }
-                  if (origName && update.rawInput) {
+                  if (origName && hasToolArgs(update.rawInput)) {
                     pendingClientTools.delete(tcId);
                     toolUseEmitted = true;
                     // codex-acp carries its internal MCP envelope here

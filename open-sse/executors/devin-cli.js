@@ -78,6 +78,7 @@ import {
   extractClientToolResults,
   fromMcpToolName,
   unwrapClientToolArgs,
+  hasToolArgs,
 } from "./lib/acpClientTools.js";
 
 const DEVIN_CLIENT_TOOL_PREFIX = "mcp_";
@@ -583,7 +584,7 @@ export class DevinCliExecutor extends BaseExecutor {
                 const detected = detectClientToolName(update, knownClientTools, DEVIN_CLIENT_TOOL_PREFIX);
                 if (tcId && detected) pendingClientTools.set(tcId, detected);
                 const origName = tcId ? pendingClientTools.get(tcId) : null;
-                if (origName && update.rawInput) {
+                if (origName && hasToolArgs(update.rawInput)) {
                   toolUseEmitted = true;
                   pendingClientTools.delete(tcId);
                   // Same envelope unwrap as acpBase: an agent that reports the

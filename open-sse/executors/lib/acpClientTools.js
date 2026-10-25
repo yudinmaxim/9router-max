@@ -254,6 +254,39 @@ export function unwrapClientToolArgs(value) {
   return unwrapClientToolEnvelope(value);
 }
 
+/**
+ * Whether a notification's `rawInput` actually carries arguments.
+ *
+ * The fallback detection path must not surface a tool call from an empty
+ * `rawInput`. Agents upsert tool calls by id: the first `session/update` may
+ * name the tool in `title` while `rawInput` is still `{}` (opencode-acp does
+ * exactly this), and the arguments either arrive on a later update or only in
+ * the bridge's sink. `{}` is truthy, so a bare `if (rawInput)` guard emits a
+ * call with no arguments — the client then fails schema validation on its own
+ * tool (live: opencode's `read` answered `SchemaError Missing key ["filePath"]`).
+ * An empty object, an empty envelope, and a blank JSON string all answer false;
+ * the sink/poll path stays authoritative for those calls.
+ */
+export function hasToolArgs(value) {
+  if (typeof value === "string") {
+    const t = value.trim();
+    if (!t || t === "{}") return false;
+    try {
+      return hasToolArgs(JSON.parse(t));
+    } catch {
+      return true; // non-JSON string: treat as real arguments
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return Boolean(value);
+  const keys = Object.keys(value);
+  if (!keys.length) return false;
+  // An envelope whose inner arguments are still empty carries no real input.
+  if (keys.length === 3 && typeof value.server === "string" && typeof value.tool === "string" && value.arguments && typeof value.arguments === "object" && !Array.isArray(value.arguments)) {
+    return Object.keys(value.arguments).length > 0;
+  }
+  return true;
+}
+
 function unwrapClientToolEnvelope(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const { server, tool, arguments: args } = value;

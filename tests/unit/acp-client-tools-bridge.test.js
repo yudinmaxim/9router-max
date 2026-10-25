@@ -358,6 +358,46 @@ describe("ACP client-tool bridge: call routing fallback", () => {
     expect(acc).toContain("cannot read that");
   });
 
+  it("does not surface a call whose rawInput is still a placeholder", async () => {
+    // Verified live with opencode-acp: the notification naming the bridged tool
+    // arrives with `rawInput: {}` — the real arguments are only in the bridge's
+    // sink, which is written once the agent actually issues the MCP call. The
+    // bare `if (update.rawInput)` guard accepted `{}` (truthy), so the client
+    // got `read` with no arguments and its own validator rejected it:
+    // "SchemaError(Missing key at ['filePath'])". Waiting is safe — the sink
+    // poll is the authoritative path for exactly this call.
+    const { acc } = await runExecute({
+      updates: [
+        { sessionUpdate: "tool_call", toolCallId: "call_1", status: "pending", title: "Calling read_file from clientTools", rawInput: {} },
+        { sessionUpdate: "tool_call_update", toolCallId: "call_1", status: "in_progress", rawInput: {} },
+        { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "reading now" } },
+      ],
+      body: { tools: [READ_FILE] },
+    });
+    expect(toolCallFrames(acc)).toEqual([]);
+    expect(acc).not.toContain('"finish_reason":"tool_calls"');
+    expect(acc).toContain("reading now");
+  });
+
+  it("reports the sink's real arguments when the notification names the tool but carries none", async () => {
+    // Same notification shape, but this time the bridge recorded the call, so
+    // the turn must end with the arguments the sink holds — not with the
+    // placeholder the notification carried.
+    const { acc } = await runExecute({
+      bridgeCalls: [{ name: "read_file", arguments: { filePath: "/tmp/real.txt" } }],
+      updates: [
+        { sessionUpdate: "tool_call", toolCallId: "call_1", status: "pending", title: "Calling read_file from clientTools", rawInput: {} },
+        { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "ignored" } },
+      ],
+      body: { tools: [READ_FILE] },
+    });
+    const calls = toolCallFrames(acc);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe("read_file");
+    expect(JSON.parse(calls[0].arguments)).toEqual({ filePath: "/tmp/real.txt" });
+    expect(frames(acc).at(-1).choices[0].finish_reason).toBe("tool_calls");
+  });
+
   it("still completes normally when the caller sent an unusable tool entry", async () => {
     const { acc, child } = await runExecute({
       updates: [{ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi" } }],

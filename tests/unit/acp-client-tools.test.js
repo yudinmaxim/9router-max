@@ -12,6 +12,7 @@ import {
   detectClientToolName,
   extractClientToolResults,
   fromMcpToolName,
+  hasToolArgs,
   toMcpToolName,
   unwrapClientToolArgs,
   writeClientToolResults,
@@ -152,6 +153,36 @@ describe("unwrapClientToolArgs", () => {
     expect(unwrapClientToolArgs(arrayArgs)).toBe(arrayArgs);
     expect(unwrapClientToolArgs("not json")).toBe("not json");
     expect(unwrapClientToolArgs(null)).toBe(null);
+  });
+});
+
+describe("hasToolArgs", () => {
+  // The fallback routing path must not surface a call from a placeholder
+  // `rawInput`. Verified live with opencode-acp: the notification naming the
+  // bridged tool carried `rawInput: {}`, the bare truthiness test accepted it,
+  // and the client's own tool failed schema validation on the empty object
+  // ("read … SchemaError Missing key ['filePath']"). The sink holds the real
+  // arguments; the fallback has to wait for them.
+  it("rejects the placeholder rawInput agents send before the arguments exist", () => {
+    expect(hasToolArgs({})).toBe(false);
+    expect(hasToolArgs(null)).toBe(false);
+    expect(hasToolArgs(undefined)).toBe(false);
+    expect(hasToolArgs("")).toBe(false);
+    expect(hasToolArgs("  ")).toBe(false);
+    expect(hasToolArgs("{}")).toBe(false);
+    expect(hasToolArgs("null")).toBe(false);
+    // An envelope whose inner arguments are still empty carries no input.
+    expect(hasToolArgs({ server: "clientTools", tool: "read_file", arguments: {} })).toBe(false);
+  });
+
+  it("accepts real arguments, envelopes, arrays and non-JSON strings", () => {
+    expect(hasToolArgs({ path: "/tmp/a.txt" })).toBe(true);
+    expect(hasToolArgs({ server: "clientTools", tool: "read_file", arguments: { path: "/a" } })).toBe(true);
+    expect(hasToolArgs('{"path":"/tmp/a.txt"}')).toBe(true);
+    // An array is legitimate tool input, not a placeholder.
+    expect(hasToolArgs([1, 2])).toBe(true);
+    // A non-JSON string is real content — forward it rather than drop it.
+    expect(hasToolArgs("just text")).toBe(true);
   });
 });
 
