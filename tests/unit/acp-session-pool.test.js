@@ -14,13 +14,25 @@ import {
 afterEach(() => clearAcpSessions());
 
 describe("ACP session pool", () => {
-  it("keys provider, connection, cwd, and model", () => {
-    expect(acpSessionKey({ provider: "cursor", connection: "a", cwd: "/x", model: "m" }))
-      .not.toBe(acpSessionKey({ provider: "cursor", connection: "b", cwd: "/x", model: "m" }));
+  it("keys provider, connection, cwd, and conversation", () => {
+    expect(acpSessionKey({ provider: "cursor", connection: "a", cwd: "/x", conversation: "c" }))
+      .not.toBe(acpSessionKey({ provider: "cursor", connection: "b", cwd: "/x", conversation: "c" }));
+    // The discriminator between two dialogues in one cwd is the conversation,
+    // never the model: two IDE windows on one agent/model/cwd used to collide
+    // and share a child.
+    expect(acpSessionKey({ provider: "cursor", connection: "a", cwd: "/x", conversation: "c1" }))
+      .not.toBe(acpSessionKey({ provider: "cursor", connection: "a", cwd: "/x", conversation: "c2" }));
+  });
+
+  it("does not key on the model — one dialogue hopping models keeps one child", () => {
+    const base = { provider: "cursor", connection: "a", cwd: "/x", conversation: "c" };
+    // `model` is no longer part of the identity; passing it must be inert.
+    expect(acpSessionKey({ ...base, model: "gpt-5.3-codex" })).toBe(acpSessionKey(base));
+    expect(acpSessionKey({ ...base, model: "composer-2.5" })).toBe(acpSessionKey(base));
   });
 
   it("separates pools by proxy, since a session must not outlive its route", () => {
-    const base = { provider: "codex-acp", connection: "a", cwd: "/x", model: "m" };
+    const base = { provider: "codex-acp", connection: "a", cwd: "/x", conversation: "c" };
     const direct = acpSessionKey(base);
     expect(acpSessionKey({ ...base, proxy: "http://127.0.0.1:12334" })).not.toBe(direct);
     expect(acpSessionKey({ ...base, proxy: "http://127.0.0.1:10001" }))

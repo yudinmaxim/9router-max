@@ -57,7 +57,10 @@ const CATALOG = {
   ],
 };
 
-const CREDENTIALS = { connectionId: "conn-1" };
+// The pool keys on the dialogue, so a turn has to carry one. `x-session-id` is
+// the generic header every client may send; the tests reuse one dialogue by
+// default and override it where a second, independent dialogue is the subject.
+const CREDENTIALS = { connectionId: "conn-1", rawHeaders: { "x-session-id": "conv-1" } };
 const REQUESTED_MODEL = "gpt-5.3-codex";
 
 /**
@@ -417,5 +420,65 @@ describe("lifecycle trace identity", () => {
       delete process.env.ACP_DEBUG_LOG;
       fs.rmSync(path.dirname(traceFile), { recursive: true, force: true });
     }
+  });
+
+  // Two dialogues open in the same IDE window (same connection, cwd, model)
+  // must NOT share a child.  The conversation key extracted from the client's
+  // x-session-id header separates them.
+  it("keeps two independent dialogues on separate children", async () => {
+    const child1 = makeFakeChild();
+    await runTurn(child1, {
+      credentials: { connectionId: "conn-1", rawHeaders: { "x-session-id": "conv-a" } },
+    });
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    const child2 = makeFakeChild();
+    const acc2 = await runTurn(child2, {
+      credentials: { connectionId: "conn-1", rawHeaders: { "x-session-id": "conv-b" } },
+    });
+    // A second child must have been spawned — different conversation.
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(sseFrames(acc2).at(-1).choices[0].finish_reason).toBe("stop");
+  });
+
+  // One dialogue hopping between models must keep ONE child.  The model is
+  // re-pinned via `session/set_config_option` on reuse, not a new spawn.
+  it("reuses the same child and re-pins the model when the dialogue switches models", async () => {
+    const child = makeFakeChild();
+    await runTurn(child);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    const beforeSecondTurn = child.writes.length;
+    const acc2 = await runTurn(child, {
+      model: "composer-2.5",
+    });
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    // No re-handshake — the session is alive. Only the model pin moves it onto
+    // the newly requested model, which is what keeps the agent-side context.
+    const secondMethods = child.writes
+      .slice(beforeSecondTurn)
+      .map((w) => JSON.parse(w.trim()))
+      .map((m) => m.method);
+    expect(secondMethods).toEqual(["session/set_config_option", "session/prompt"]);
+    const pin = JSON.parse(child.writes[beforeSecondTurn].trim());
+    expect(pin.params).toEqual({ sessionId: "fake-session", configId: "model", value: "composer-2.5[fast=true]" });
+    expect(sseFrames(acc2).at(-1).choices[0].finish_reason).toBe("stop");
+  });
+
+  // Without a conversation key the pool is skipped — a fresh child every time.
+  it("spawns fresh when no conversation identity is present", async () => {
+    const child1 = makeFakeChild();
+    await runTurn(child1, {
+      credentials: { connectionId: "conn-1" }, // no rawHeaders → no conversation
+    });
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    const child2 = makeFakeChild();
+    const acc2 = await runTurn(child2, {
+      credentials: { connectionId: "conn-1" },
+    });
+    // No conversation identity means no pooling — a new child every turn.
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(sseFrames(acc2).at(-1).choices[0].finish_reason).toBe("stop");
   });
 });

@@ -224,6 +224,24 @@ export function resolveSessionId(opts = {}) {
     return resolveSessionIdentity(opts).sessionId;
 }
 
+/**
+ * Conversation identity for process/session pooling.
+ *
+ * Unlike resolveSessionIdentity this answers "which dialogue is this?" and
+ * never falls back to an account-scoped id: the per-connection fallback names
+ * an ACCOUNT, not a dialogue, and pooling on it fuses every dialogue that
+ * shares an account, a cwd and a model into one live session. Returning ""
+ * tells the caller to skip pooling — the history travels in the prompt anyway.
+ *
+ * @returns {string} a stable conversation id, or "" when the request carries
+ *   nothing that separates it from other dialogues on the same connection
+ */
+export function resolveConversationKey({ headers, body, connectionId, scope = "" } = {}) {
+    const client = extractClientSessionId(headers, body, scope);
+    if (client) return client;
+    return assistantTextSessionId(`${scope}:${connectionId || ""}`, body) || "";
+}
+
 export function resolveContinuationId({ sessionId, connectionId, scope = "", ephemeral = false } = {}) {
     if (ephemeral) return crypto.randomUUID();
     const key = `${scope}:${connectionId || ""}:${sessionId || ""}`;

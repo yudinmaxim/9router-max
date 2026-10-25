@@ -31,17 +31,23 @@ export function peekAcpSession(key) {
   return entry;
 }
 
-export function acpSessionKey({ provider, connection, cwd, model, proxy = "", noProxy = "" }) {
-  return JSON.stringify([provider || "", connection || "", cwd || "", model || "", proxy || "", noProxy || ""]);
+// The key is per-conversation, NOT per-model. Two dialogues open in the same
+// cwd (two IDE windows, two agents, one model) must never share a child —
+// they used to, because the model id was the only discriminator. A dialogue
+// hopping between models must keep ONE child — the model is re-pinned on
+// reuse instead (`session/set_config_option`), which is also what preserves
+// the agent-side context. So: conversation in, model out.
+export function acpSessionKey({ provider, connection, cwd, conversation, proxy = "", noProxy = "" }) {
+  return JSON.stringify([provider || "", connection || "", cwd || "", conversation || "", proxy || "", noProxy || ""]);
 }
 
-export function findAcpSession({ provider, connection, cwd, model, proxy = "", noProxy = "" }, now = Date.now()) {
+export function findAcpSession({ provider, connection, cwd, conversation, proxy = "", noProxy = "" }, now = Date.now()) {
   for (const [key, entry] of sessions) {
     if (entry.expiresAt <= now || entry.dead) continue;
     let parts;
     try { parts = JSON.parse(key); } catch { continue; }
     if (parts[0] === (provider || "") && parts[1] === (connection || "") &&
-        parts[2] === (cwd || "") && parts[3] === (model || "") &&
+        parts[2] === (cwd || "") && parts[3] === (conversation || "") &&
         parts[4] === (proxy || "") && parts[5] === (noProxy || "")) return entry;
   }
   return null;

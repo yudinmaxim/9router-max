@@ -62,6 +62,7 @@ import { BaseExecutor } from "../base.js";
 import { ensureAcpAdapter } from "./acpAdapter.js";
 import { createAcpTransport } from "./acpTransport.js";
 import { acpSessionKey, acquireAcpSession, peekAcpSession, findAcpSession, putAcpSession, markAcpSessionDead } from "./acpSessionPool.js";
+import { resolveConversationKey } from "../../utils/sessionManager.js";
 import { resolveWorkspaceCwd, buildPromptText, extractMessages, estimateTokens, agentSpawnCommand } from "./acpCommon.js";
 import { stripHistoryForContext } from "../../services/capacityAdapter.js";
 import { getCapabilitiesForModel } from "../../providers/capabilities.js";
@@ -608,12 +609,26 @@ export class AcpAgentExecutor extends BaseExecutor {
         // inherited set rather than replacing it. Resolved out here because the
         // `start()` callback below runs with the stream as `this`.
         const sessionConnection = credentials?.connectionId || credentials?.connectionName;
-        const sessionIdentity = sessionConnection
+        // Pool per DIALOGUE, not per model: two dialogues sharing agent,
+        // connection and cwd must not share one child, while one dialogue
+        // hopping between models must keep its child and re-pin the model on
+        // reuse. The id comes from the client's own session header/body field
+        // (x-session-id, Claude Code's metadata.user_id, ...), then from a
+        // hash of the accumulated assistant text; with neither there is no
+        // dialogue to resume — pooling is skipped rather than keyed on the
+        // account, which would fuse every dialogue of one connection.
+        const conversationKey = resolveConversationKey({
+          headers: rawHeaders,
+          body: b,
+          connectionId: sessionConnection,
+          scope: providerId,
+        });
+        const sessionIdentity = sessionConnection && conversationKey
           ? {
               provider: providerId,
               connection: sessionConnection,
               cwd: workspaceCwd,
-              model,
+              conversation: conversationKey,
               proxy: proxyOptions?.connectionProxyEnabled ? proxyOptions.connectionProxyUrl : "",
               noProxy: proxyOptions?.connectionNoProxy || "",
             }
