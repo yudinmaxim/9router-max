@@ -169,7 +169,11 @@ export function buildPromptText(messages, toolDefs = []) {
         if (!p || typeof p !== "object") continue;
         if (p.type === "text") text += String(p.text || "");
         else if (p.type === "input_text") text += String(p.text || "");
-        else if (p.type === "tool_use") {
+        else if (p.type === "image_url" || p.type === "input_image") {
+          // The bytes go out as native ACP image blocks (see extractImageUrls);
+          // the placeholder only keeps the transcript readable.
+          text += "\n[image]\n";
+        } else if (p.type === "tool_use") {
           text += `\n[Tool call ${p.name} id=${p.id}]\n${JSON.stringify(p.input ?? {})}\n`;
         } else if (p.type === "tool_result") {
           const c =
@@ -205,6 +209,34 @@ export function buildPromptText(messages, toolDefs = []) {
     }
   }
   return lines.join("\n\n") || "(empty)";
+}
+
+// Clients like Zed paste clipboard images as OpenAI `image_url` parts (data:
+// URLs) or Responses-API `input_image` items. ACP carries them natively as
+// `image` content blocks, and the adapters translate those into whatever the
+// agent's model expects — but only if the executor puts them into the prompt.
+// Flattening everything to text (the old behaviour) silently dropped them, so
+// agents behind the bridge never saw a pasted picture.
+/** Collect image URLs (data:/http[s]:) from an OpenAI-shaped messages array. */
+export function extractImageUrls(messages) {
+  const urls = [];
+  const push = (u) => {
+    if (typeof u === "string" && /^(https?:|data:image\/)/i.test(u.trim())) urls.push(u.trim());
+  };
+  for (const m of Array.isArray(messages) ? messages : []) {
+    if (!m || typeof m !== "object") continue;
+    const parts = [m.content, m.parts, m.input].find(Array.isArray);
+    if (!parts) continue;
+    for (const p of parts) {
+      if (!p || typeof p !== "object") continue;
+      if (p.type === "image_url" || p.type === "input_image") {
+        push(typeof p.image_url === "string" ? p.image_url : (p.image_url?.url || p.url));
+      } else if (p.type === "image" && typeof p.uri === "string") {
+        push(p.uri);
+      }
+    }
+  }
+  return urls;
 }
 
 /** Pull the `messages`/`input` array out of an OpenAI-shaped request body. */

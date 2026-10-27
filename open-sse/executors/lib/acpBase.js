@@ -63,7 +63,7 @@ import { ensureAcpAdapter } from "./acpAdapter.js";
 import { createAcpTransport } from "./acpTransport.js";
 import { acpSessionKey, acquireAcpSession, peekAcpSession, findAcpSession, putAcpSession, markAcpSessionDead } from "./acpSessionPool.js";
 import { resolveConversationKey } from "../../utils/sessionManager.js";
-import { resolveWorkspaceCwd, buildPromptText, extractMessages, estimateTokens, agentSpawnCommand } from "./acpCommon.js";
+import { resolveWorkspaceCwd, buildPromptText, extractMessages, extractImageUrls, estimateTokens, agentSpawnCommand } from "./acpCommon.js";
 import { stripHistoryForContext } from "../../services/capacityAdapter.js";
 import { getCapabilitiesForModel } from "../../providers/capabilities.js";
 import {
@@ -969,7 +969,16 @@ export class AcpAgentExecutor extends BaseExecutor {
           // never arrive, holding the session queue behind it.
           if (!sendRpc("session/prompt", {
             sessionId,
-            prompt: [{ type: "text", text: promptText }],
+            prompt: [
+            { type: "text", text: promptText },
+            // Pasted images go out as native ACP blocks. data: URLs are split
+            // into data+mimeType (the canonical ACP shape); http(s) stay as
+            // uris. Agents whose model has no vision ignore the blocks.
+            ...extractImageUrls(messages).map((uri) => {
+              const m = /^data:([^;,]+);base64,([\s\S]+)$/i.exec(uri);
+              return m ? { type: "image", mimeType: m[1], data: m[2] } : { type: "image", uri };
+            }),
+          ],
           })) {
             if (sessionKey && peekAcpSession(sessionKey)?.child === child) markAcpSessionDead(sessionKey);
             finish(`${label} ACP transport closed before the prompt could be sent`);
