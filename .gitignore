@@ -101,3 +101,8 @@ graphify-out/*
 .start-dev.ps1
 start-dev-silent.cjs
 debug.log
+
+# ACP docs (override docs/* ignore)
+!docs/ACP-SERVER-SPEC.md
+!docs/ACP-HANDOFF.md
+!docs/ACP-JOURNAL.md

@@ -54,13 +54,11 @@
  * turn. The agent's own tools stay inside its sandbox and are only logged.
  */
 
-import { spawn } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { BaseExecutor } from "../base.js";
-import { ensureAcpAdapter } from "./acpAdapter.js";
-import { createAcpTransport } from "./acpTransport.js";
+import { createAcpClientCore, spawnAcpChild } from "./acpClientCore.js";
 import { acpSessionKey, acquireAcpSession, peekAcpSession, findAcpSession, putAcpSession, markAcpSessionDead } from "./acpSessionPool.js";
 import { resolveConversationKey } from "../../utils/sessionManager.js";
 import { resolveWorkspaceCwd, buildPromptText, extractMessages, extractImageUrls, estimateTokens, agentSpawnCommand } from "./acpCommon.js";
@@ -398,6 +396,112 @@ function mapStopReason(stopReason) {
 
 // ─── AcpAgentExecutor ────────────────────────────────────────────────────────
 
+/**
+ * Build permission policy by merging layers from most to least specific:
+ * router default → per-connection → request body → request header.
+ */
+function buildPermissionPolicy({ acpPermissions, rawHeaders, body }) {
+  const headerValue = rawHeaders[ACP_PERMISSION_HEADER];
+  const bodyValue = body?.metadata?.[ACP_PERMISSION_BODY_KEY];
+  return mergePolicies(
+    acpPermissions,
+    parsePolicyInput(bodyValue),
+    parsePolicyInput(Array.isArray(headerValue) ? headerValue[0] : headerValue)
+  );
+}
+
+/**
+ * Build session defaults (operator's dashboard choices) merged from header
+ * and body layers. Returns an object of configId→value or null.
+ */
+function buildSessionDefaults({ acpSessionDefaults, rawHeaders, body }) {
+  const headerValue = rawHeaders[ACP_DEFAULTS_HEADER];
+  const bodyValue = body?.metadata?.[ACP_DEFAULTS_BODY_KEY];
+  const requestDefaults = parsePolicyInput(bodyValue) || parsePolicyInput(
+    Array.isArray(headerValue) ? headerValue[0] : headerValue
+  );
+  return { ...(acpSessionDefaults || {}), ...(requestDefaults || {}) };
+}
+
+/**
+ * Resolve spawn plan: environment (proxy-injected), lifecycle trace data,
+ * and the agent binary. All fail-open — a bad proxy URL or missing env
+ * must never abort the turn.
+ */
+async function resolveSpawnPlan({ acp, providerId, proxyOptions, log }) {
+  const { exe, envVar, versionsDir, extraDirs } = acp;
+
+  const env = { ...process.env, ...(acp.env?.() || acp.env || {}) };
+  if (proxyOptions?.connectionProxyEnabled && proxyOptions.connectionProxyUrl) {
+    env.HTTP_PROXY = proxyOptions.connectionProxyUrl;
+    env.HTTPS_PROXY = proxyOptions.connectionProxyUrl;
+    env.ALL_PROXY = proxyOptions.connectionProxyUrl;
+    if (proxyOptions.connectionNoProxy) env.NO_PROXY = proxyOptions.connectionNoProxy;
+    log?.info?.("ACP_PROXY", JSON.stringify({
+      provider: providerId,
+      enabled: true,
+      poolId: proxyOptions.connectionProxyPoolId || null,
+      strict: proxyOptions.strictProxy === true,
+      protocol: (() => { try { return new URL(proxyOptions.connectionProxyUrl).protocol; } catch { return null; } })(),
+      host: (() => { try { return new URL(proxyOptions.connectionProxyUrl).hostname; } catch { return null; } })(),
+    }));
+  } else {
+    log?.info?.("ACP_PROXY", JSON.stringify({ provider: providerId, enabled: false }));
+  }
+
+  const proxyTrace = {
+    proxyEnabled: Boolean(proxyOptions?.connectionProxyEnabled && proxyOptions.connectionProxyUrl),
+    proxyPoolId: proxyOptions?.connectionProxyPoolId || null,
+    proxyHost: (() => {
+      try { return proxyOptions?.connectionProxyUrl ? new URL(proxyOptions.connectionProxyUrl).hostname : null; }
+      catch { return null; }
+    })(),
+    proxyPort: (() => {
+      try { return proxyOptions?.connectionProxyUrl ? new URL(proxyOptions.connectionProxyUrl).port || null : null; }
+      catch { return null; }
+    })(),
+  };
+
+  const bin = acp.adapter
+    ? (await ensureAcpAdapter(acp.adapter)) ||
+      resolveAgentBin({ envVar, exe, versionsDir, extraDirs })
+    : resolveAgentBin({ envVar, exe, versionsDir, extraDirs });
+
+  return { env, proxyTrace, bin };
+}
+
+/**
+ * Derive session identity from executor input.
+ *
+ * Pool per DIALOGUE, not per model: two dialogues sharing agent, connection
+ * and cwd must not share one child, while one dialogue hopping between models
+ * must keep its child and re-pin the model on reuse. The id comes from the
+ * client's own session header/body field (x-session-id, Claude Code's
+ * metadata.user_id, ...), then from a hash of the accumulated assistant text;
+ * with neither there is no dialogue to resume — pooling is skipped rather than
+ * keyed on the account, which would fuse every dialogue of one connection.
+ */
+function deriveSessionIdentity({ providerId, rawHeaders, body, credentials, cwd, proxyOptions }) {
+  const connectionId = credentials?.connectionId || credentials?.connectionName;
+  const conversationKey = resolveConversationKey({
+    headers: rawHeaders,
+    body,
+    connectionId,
+    scope: providerId,
+  });
+  if (!connectionId || !conversationKey) return { sessionIdentity: null, sessionKey: null };
+  const sessionIdentity = {
+    provider: providerId,
+    connection: connectionId,
+    cwd,
+    conversation: conversationKey,
+    proxy: proxyOptions?.connectionProxyEnabled ? proxyOptions.connectionProxyUrl : "",
+    noProxy: proxyOptions?.connectionNoProxy || "",
+  };
+  const sessionKey = acpSessionKey(sessionIdentity);
+  return { sessionIdentity, sessionKey };
+}
+
 export class AcpAgentExecutor extends BaseExecutor {
   /**
    * @param {string} providerId  registry id this instance is registered under
@@ -450,7 +554,7 @@ export class AcpAgentExecutor extends BaseExecutor {
   }
 
   async execute({ model, body, credentials, acpPermissions, acpSessionDefaults, mcpProxyTargets, proxyOptions = null, signal, log }) {
-    const { exe, envVar, args, tag, label, installHint, errorType, versionsDir, extraDirs } = this.acp;
+    const { exe, envVar, args, tag, label, installHint, errorType } = this.acp;
     const b = body ?? {};
     const contextWindow = getCapabilitiesForModel(this.providerId, model).contextWindow || 200000;
     const guardedBody = stripHistoryForContext(b, contextWindow);
@@ -461,75 +565,16 @@ export class AcpAgentExecutor extends BaseExecutor {
     const clientTools = Array.isArray(b.tools) ? b.tools.filter(Boolean) : [];
     const promptText = buildPromptText(messages, clientTools);
     const workspaceCwd = resolveWorkspaceCwd(b);
-    // Resolved here rather than inside the stream's start(), which runs with the
-    // stream as `this`.
-    // Inherit the parent environment: the CLI reads its stored auth and its
-    // default model from its own config files. Nothing is injected — a bogus
-    // key here would override the agent's own credentials. A spec may add
-    // its own entries (CODEX_PATH and friends); those still merge over the
-    // inherited set rather than replacing it.
-    const env = { ...process.env, ...(this.acp.env?.() || this.acp.env || {}) };
-    if (proxyOptions?.connectionProxyEnabled && proxyOptions.connectionProxyUrl) {
-      env.HTTP_PROXY = proxyOptions.connectionProxyUrl;
-      env.HTTPS_PROXY = proxyOptions.connectionProxyUrl;
-      env.ALL_PROXY = proxyOptions.connectionProxyUrl;
-      if (proxyOptions.connectionNoProxy) env.NO_PROXY = proxyOptions.connectionNoProxy;
-      log?.info?.("ACP_PROXY", JSON.stringify({
-        provider: this.providerId,
-        enabled: true,
-        poolId: proxyOptions.connectionProxyPoolId || null,
-        strict: proxyOptions.strictProxy === true,
-        protocol: (() => { try { return new URL(proxyOptions.connectionProxyUrl).protocol; } catch { return null; } })(),
-        host: (() => { try { return new URL(proxyOptions.connectionProxyUrl).hostname; } catch { return null; } })(),
-      }));
-    } else {
-      log?.info?.("ACP_PROXY", JSON.stringify({ provider: this.providerId, enabled: false }));
-    }
-    // Host/pool only — the lifecycle trace must not carry proxy credentials.
-    const proxyTrace = {
-      proxyEnabled: Boolean(proxyOptions?.connectionProxyEnabled && proxyOptions.connectionProxyUrl),
-      proxyPoolId: proxyOptions?.connectionProxyPoolId || null,
-      proxyHost: (() => {
-        try { return proxyOptions?.connectionProxyUrl ? new URL(proxyOptions.connectionProxyUrl).hostname : null; }
-        catch { return null; }
-      })(),
-      // The pools all sit on 127.0.0.1 and differ only by port, so without it
-      // a rotation trace would be unreadable.
-      proxyPort: (() => {
-        try { return proxyOptions?.connectionProxyUrl ? new URL(proxyOptions.connectionProxyUrl).port || null : null; }
-        catch { return null; }
-      })(),
-    };
-    // Agents whose CLI has no ACP subcommand spawn a bridge instead (see
-    // acpAdapter.js), which may need installing on this machine the first time.
-    const bin = this.acp.adapter
-      ? (await ensureAcpAdapter(this.acp.adapter)) ||
-        resolveAgentBin({ envVar, exe, versionsDir, extraDirs })
-      : resolveAgentBin({ envVar, exe, versionsDir, extraDirs });
+    const { env, proxyTrace, bin } = await resolveSpawnPlan({
+      acp: this.acp,
+      providerId: this.providerId,
+      proxyOptions,
+      log,
+    });
 
-    // Permission policy, most specific last: router default → per-connection →
-    // request body → request header. The request layers let a client loosen or
-    // tighten for one call without persisting anything.
     const rawHeaders = credentials?.rawHeaders || {};
-    const headerValue = rawHeaders[ACP_PERMISSION_HEADER];
-    const bodyValue = b?.metadata?.[ACP_PERMISSION_BODY_KEY];
-    const policy = mergePolicies(
-      acpPermissions,
-      parsePolicyInput(bodyValue),
-      parsePolicyInput(Array.isArray(headerValue) ? headerValue[0] : headerValue)
-    );
-
-    // Options the operator pinned on the provider page. The request may override
-    // them for one call, the same layering ACP permissions use — a per-request
-    // header beats the dashboard without persisting anything.
-    const requestDefaults = (() => {
-      const headerValue2 = credentials?.rawHeaders?.[ACP_DEFAULTS_HEADER];
-      const bodyValue2 = b?.metadata?.[ACP_DEFAULTS_BODY_KEY];
-      return parsePolicyInput(bodyValue2) || parsePolicyInput(
-        Array.isArray(headerValue2) ? headerValue2[0] : headerValue2
-      );
-    })();
-    const sessionDefaults = { ...(acpSessionDefaults || {}), ...(requestDefaults || {}) };
+    const policy = buildPermissionPolicy({ acpPermissions, rawHeaders, body: b });
+    const sessionDefaults = buildSessionDefaults({ acpSessionDefaults, rawHeaders, body: b });
     // `toolCallId → kind`, filled from session/update as the agent narrates its
     // own tools. The permission request reports `kind: "other"` for everything,
     // so this map is the only truthful source of what the action is.
@@ -606,44 +651,14 @@ export class AcpAgentExecutor extends BaseExecutor {
           controller.close();
         };
 
-        // Inherit the parent environment: the CLI reads its stored auth and its
-        // default model from its own config files. Nothing is injected — a bogus
-        // key here would override the agent's own credentials. A spec may add
-        // its own entries (CODEX_PATH and friends); those still merge over the
-        // inherited set rather than replacing it. Resolved out here because the
-        // `start()` callback below runs with the stream as `this`.
-        const sessionConnection = credentials?.connectionId || credentials?.connectionName;
-        // Pool per DIALOGUE, not per model: two dialogues sharing agent,
-        // connection and cwd must not share one child, while one dialogue
-        // hopping between models must keep its child and re-pin the model on
-        // reuse. The id comes from the client's own session header/body field
-        // (x-session-id, Claude Code's metadata.user_id, ...), then from a
-        // hash of the accumulated assistant text; with neither there is no
-        // dialogue to resume — pooling is skipped rather than keyed on the
-        // account, which would fuse every dialogue of one connection.
-        const conversationKey = resolveConversationKey({
-          headers: rawHeaders,
+        const { sessionIdentity, sessionKey } = deriveSessionIdentity({
+          providerId,
+          credentials,
+          rawHeaders,
           body: b,
-          connectionId: sessionConnection,
-          scope: providerId,
+          cwd: workspaceCwd,
+          proxyOptions,
         });
-        const sessionIdentity = sessionConnection && conversationKey
-          ? {
-              provider: providerId,
-              connection: sessionConnection,
-              cwd: workspaceCwd,
-              conversation: conversationKey,
-              proxy: proxyOptions?.connectionProxyEnabled ? proxyOptions.connectionProxyUrl : "",
-              noProxy: proxyOptions?.connectionNoProxy || "",
-            }
-          : null;
-        const sessionKey = sessionIdentity
-          ? acpSessionKey({
-              ...sessionIdentity,
-              proxy: sessionIdentity.proxy,
-              noProxy: sessionIdentity.noProxy,
-            })
-          : null;
         let pooled = null;
         let releaseSession = null;
         // True once this turn stored its child in the pool (fresh session).
@@ -695,17 +710,11 @@ export class AcpAgentExecutor extends BaseExecutor {
           }
           acpTrace("reuse", { provider: providerId, pid: child.pid, sessionId: pooled.sessionId, ...proxyTrace });
         } else {
-          child = spawn(cmd, spawnArgs, {
-            env,
-            cwd: workspaceCwd,
-            stdio: ["pipe", "pipe", "pipe"],
-            shell,
-          });
+          child = spawnAcpChild({ cmd, args: spawnArgs, env, cwd: workspaceCwd, shell });
           acpTrace("spawn", { provider: providerId, pid: child.pid, cmd, hadEntry: Boolean(existing), ...proxyTrace });
         }
 
         let spawnError = null;
-        let stdinClosed = false;
 
         if (signal) {
           signal.addEventListener("abort", () => {
@@ -715,7 +724,13 @@ export class AcpAgentExecutor extends BaseExecutor {
         }
 
         // ── JSON-RPC state machine ──────────────────────────────────────────
-        let idCounter = 1;
+        const core = createAcpClientCore({
+          child,
+          transport,
+          trace: (event, data) => acpTrace(event, { provider: providerId, ...data }),
+        });
+        child = core.child;
+        transport = core.transport;
         let initDone = false;
         let sessionCreated = false;
         let promptSent = false;
@@ -745,29 +760,29 @@ export class AcpAgentExecutor extends BaseExecutor {
         let totalText = "";
         let finished = false;
 
-        if (!transport) transport = createAcpTransport(child);
-        const sendRpc = (method, params, beforeSend = null) => {
-          const id = idCounter++;
-          // Two ids have to be known before the write leaves: a config pin (so a
-          // rejection maps to its option) and the session/new|resume call (so an
-          // empty answer maps to our own request). An agent may answer inside
-          // `stdin.write` — a test double does, and a fast local agent can — so
-          // anything registered after the send can be raced by its own reply.
-          if (method === "session/set_config_option") {
-            configSetIds.set(id, { configId: params?.configId ?? "", value: params?.value });
-          }
-          if (beforeSend) beforeSend(id);
-          const ok = transport.send(method, params, id);
-          acpTrace("rpc-send", { provider: providerId, pid: child?.pid, id, method, ok: Boolean(ok) });
-          if (!ok) configSetIds.delete(id);
-          return ok ? id : null;
-        };
+        const sendRpc = (method, params, beforeSend = null) =>
+          core.sendRpc(
+            method,
+            params,
+            (id) => {
+              // Two ids have to be known before the write leaves: a config pin (so a
+              // rejection maps to its option) and the session/new|resume call (so an
+              // empty answer maps to our own request). An agent may answer inside
+              // `stdin.write` — a test double does, and a fast local agent can — so
+              // anything registered after the send can be raced by its own reply.
+              if (method === "session/set_config_option") {
+                configSetIds.set(id, { configId: params?.configId ?? "", value: params?.value });
+              }
+              if (beforeSend) beforeSend(id);
+            },
+            (id) => configSetIds.delete(id)
+          );
         let removeMessageListener = null;
 
         // Answer an agent-initiated request under the id the agent chose.
         // Must not touch idCounter — that counter tracks requests we made, and
         // reusing its values would collide with their in-flight responses.
-        const sendRpcRaw = (obj) => transport.sendRaw(obj);
+        const sendRpcRaw = (obj) => core.sendRpcRaw(obj);
 
         const chunk = (delta, finishReason = null, extra = {}) => {
           emit(
@@ -909,22 +924,10 @@ export class AcpAgentExecutor extends BaseExecutor {
             closeStream();
             return;
           }
-          try {
-            if (!stdinClosed) {
-              stdinClosed = true;
-              acpTrace("stdin-end", { provider: providerId, pid: child.pid });
-              child.stdin.end();
-            }
-          } catch {
-            /* ignore */
-          }
+          core.endStdin();
 
           // Give the CLI a moment to exit cleanly, then make sure it does.
-          const killTimer = setTimeout(() => {
-            acpTrace("sigkill-timer", { provider: providerId, pid: child.pid, killed: child.killed });
-            if (!child.killed) child.kill("SIGKILL");
-          }, 2000);
-          killTimer.unref?.();
+          const killTimer = core.scheduleKill(2000);
 
           if (sinkPoll) {
             clearInterval(sinkPoll);
@@ -1011,7 +1014,7 @@ export class AcpAgentExecutor extends BaseExecutor {
         };
 
         // ── stdout reader (NDJSON) ──────────────────────────────────────────
-        removeMessageListener = transport.onMessage((msg) => {
+        removeMessageListener = core.onMessage((msg) => {
 
             // ── initialize response → open a session ──────────────────────
             if (!initDone && msg.result !== undefined && !msg.method) {
