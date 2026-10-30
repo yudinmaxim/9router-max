@@ -428,7 +428,7 @@ function buildSessionDefaults({ acpSessionDefaults, rawHeaders, body }) {
  * and the agent binary. All fail-open — a bad proxy URL or missing env
  * must never abort the turn.
  */
-async function resolveSpawnPlan({ acp, providerId, proxyOptions, log }) {
+export async function resolveSpawnPlan({ acp, providerId, proxyOptions, log }) {
   const { exe, envVar, versionsDir, extraDirs } = acp;
 
   const env = { ...process.env, ...(acp.env?.() || acp.env || {}) };
