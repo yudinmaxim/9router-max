@@ -18,6 +18,150 @@ HEAD:      296905f0  refactor(acp): extract AcpClientCore from acpBase for serve
 
 **НЕ коммитить / НЕ пушить без явного разрешения пользователя. НЕ трогать `stable`, порт 20128, `9router.service`.**
 
+## Состояние на 2026-10-31
+
+### Сервер ACP
+
+Готова transport-agnostic façade в `open-sse/acp/server.js`:
+
+- `initialize`;
+- `session/new`;
+- `session/prompt`;
+- `session/update` streaming;
+- `session/load`;
+- `session/resume`;
+- `session/list`;
+- `session/delete`;
+- `session/set_config_option` для same-provider model switch.
+
+`open-sse/acp/transcript.js` хранит ShadowTranscript в памяти процесса.
+
+Persistence переведён с JSON-файлов на существующую SQLite DB 9router:
+
+```text
+~/.9router/db/data.sqlite
+$DATA_DIR/db/data.sqlite
+```
+
+Добавлено:
+
+- `src/lib/db/schema.js`: `SCHEMA_VERSION = 5`, таблица `acpDialogues`;
+- `src/lib/db/repos/acpDialoguesRepo.js`;
+- exports в `src/lib/db/index.js`;
+- `server.js` использует repo для load/list/delete/upsert.
+
+`acpDialogues.data` содержит только transcript; не класть туда env, headers, API keys, refresh tokens или MCP credentials.
+
+### Проверки
+
+```text
+13 ACP test files passed
+173 tests passed
+node --check open-sse/acp/server.js — passed
+```
+
+M3-тесты переписаны на DB-backed persistence.
+
+### Что осталось
+
+- проверить и стабилизировать DB-backed тесты с изолированной test DB;
+- child-message multiplexer для параллельных RPC;
+- relay `session/request_permission`;
+- relay `fs/*`;
+- relay `terminal/*`;
+- `session/cancel`;
+- MCP capability negotiation и tool relay;
+- cross-provider transcript transfer;
+- реальный Zed ACP trace;
+- LSP не добавлять до анализа реального Zed ACP trace.
+
+### Runtime решение
+
+Standalone `node open-sse/acp/cli.js acp` не считать production path: чистый Node не знает project aliases и тянет Next/CommonJS runtime-цепочку. Алиасы восстановлены; не заменять их относительными импортами ради CLI.
+
+Новая архитектура портов:
+
+```text
+20128 — stable 9router, не трогать
+20129 — текущая техническая копия 9router: dashboard, REST, OpenAI `/v1/*`
+20130 — ACP WebSocket listener для console bridge
+```
+
+`20129` — один exp-сервер и один порт для dashboard/REST/OpenAI и ACP WebSocket. ACP этап 1 использует хардкодный provider/model, чтобы сначала доказать полный маршрут. `20130` не использовать.
+
+Полный поток:
+
+```text
+Zed → stdio → Dart bridge → WebSocket :20130 → ACP server → provider agent CLI
+```
+
+`20129` и `20130` — разные входы одного технического 9router процесса. `20128` не использовать.
+
+### Dart bridge
+
+Создана директория:
+
+```text
+acp-bridge/
+├── pubspec.yaml
+├── README.md
+└── bin/acp_bridge.dart
+```
+
+Bridge:
+
+- читает NDJSON ACP из stdin;
+- валидирует входной JSON;
+- подключается к WebSocket;
+- пересылает text frames в stdout;
+- ошибки пишет в stderr;
+- `--url` переопределяет URL.
+
+Конфиг Linux:
+
+```text
+~/.config/9router/acp-bridge.json
+```
+
+Пример:
+
+```json
+{
+  "url": "ws://127.0.0.1:20129/api/acp/ws"
+}
+```
+
+Проверено:
+
+```text
+Dart 3.13.1
+Dart analyze — No issues found
+Dart native compile — passed
+```
+
+Binary:
+
+```text
+acp-bridge/dist/9router-acp-bridge
+```
+
+WebSocket endpoint пока не реализован, поэтому реальный bridge smoke test получил ожидаемый `SocketException: Connection refused`.
+
+### Ближайший шаг
+
+1. Реализовать серверный ACP endpoint в runtime 9router.
+2. Подключить к нему Dart bridge.
+3. Прогнать `initialize → session/new → session/prompt` через реальный WebSocket.
+4. Только потом добавлять Zed smoke test.
+
+Не коммитить и не пушить без разрешения пользователя.
+
+## Текущий план
+
+Lifecycle façade проходит fake-child проверки. Для полноценной IDE-работы добавить child-message multiplexer, `session/request_permission`, `fs/*`, `terminal/*`, `session/cancel`, MCP tool relay и cross-provider transfer. LSP отложить до реального Zed ACP trace.
+
+Создать `acp-bridge/`. Предпочтительная реализация — Dart 3.13.1. Native binary собирается через `dart compile exe`. Bridge только проксирует stdio NDJSON ACP в router transport; provider, transcript, MCP policy и LSP остаются на сервере.
+
 ### Незакоммиченная работа M1 (untracked, цела на диске)
 
 || Файл | Строк | Состояние |

@@ -119,4 +119,82 @@ const port = Number(process.env.PORT) || 20128;
 
 ---
 
-*Продолжение следует...*
+## 2026-10-30 — M1: ACP-серверная façade (initialize + session/new) — ЗАВЕРШЁНО ✅
+
+M0 закрыт коммитом `296905f0`. M1 закоммичен `e5581fc4`.
+
+### Сделано
+- `open-sse/acp/server.js` (148 строк) — `createAcpServer({ write, openChild, modelCatalog, log, clientInfo })`.
+  Транспортно-агностичен, без side-effect'ов: всё внешнее инжектится, поэтому контракт
+  тестируется на фикстуре без реальных бинарей. Реализованы `initialize` (protocolVersion 1,
+  честные agentCapabilities, `authMethods: []`, каталог всех моделей — Q3) и `session/new`
+  (открывает child, регистрирует диалог по **внешнему** `zedSessionId`, возвращает models/configOptions).
+  Неизвестный запрос → `-32601`, уведомление → без ответа, ошибка openChild → `-32603` без
+  регистрации, отсутствующий cwd → `-32602`. Линт чист.
+- `open-sse/acp/factory.js` (109 строк) — prod-фабрика `openChild` поверх `resolveSpawnPlan` + `createAcpClientCore`
+  + handshake `initialize`→`session/new`. Добавлен `export` для `resolveSpawnPlan` в acpBase.js.
+- `open-sse/acp/cli.js` (94 строки) — stdio-вход (NDJSON из stdin в stdout, логи в stderr).
+  Переиспользует `createAcpTransport` для фрейминга. Provider selection: хардкод `codex-acp` для M1.
+- `tests/unit/acp-server-m1.test.js` (240 строк) — **16 golden-тестов, все зелёные**: транскрипт
+  исходящих кадров + изоляция (5 tabов → 5 записей, у каждого свой `transcript`), мультиплекс
+  одного child без слияния диалогов, гигиена транспорта.
+- ACP-набор целиком: `unit/acp-*.test.js` → 13 файлов / **165 тестов зелёные**.
+- Билд: прошёл с `NEXT_PRIVATE_DISABLE_TURBOPACK=1` (turbopack падал из-за Rust worker threads в окружении).
+
+---
+
+## 2026-10-31 — план расширения ACP и bridge
+
+Текущая серверная façade достаточна для первичной проверки связки на fake child и подготовки smoke-теста. Lifecycle сам по себе недостаточен для полноценной IDE-работы.
+
+Добавлено в план:
+
+- общий child-message multiplexer для параллельных RPC;
+- прозрачный relay `session/request_permission` child ↔ Zed;
+- прозрачный relay `fs/*` child ↔ Zed;
+- прозрачный relay `terminal/*` child ↔ Zed;
+- `session/cancel`;
+- MCP capability negotiation и tool relay; серверный MCP loop пока не делать;
+- cross-provider transcript transfer;
+- реальный Zed ACP trace;
+- LSP не добавлять до обнаружения фактических Zed ACP extension methods.
+
+## Портовая схема и фактический поток
+
+Экспериментальный worktree запускается как полная копия 9router на `20129`; старый stable остаётся на `20128`.
+
+ACP listener должен использовать тот же exp-сервер и порт `20129`, что dashboard/REST/OpenAI:
+
+```text
+20128 stable 9router
+20129 exp 9router REST/dashboard/OpenAI
+20129 exp ACP WebSocket + HTTP
+```
+
+Фактический поток:
+
+```text
+Zed → stdio → Dart bridge → WebSocket :20129 → ACP server → выбранный provider agent CLI
+```
+
+Bridge имитирует внешний console tool и только транслирует ACP JSON-RPC. ACP server выбирает модель/provider, запускает соответствующий agent CLI, держит session state и проксирует живой ACP protocol. `20129` использует тот же Next/Node server и не поднимает второй полный instance.
+
+## Console bridge
+
+Нужна отдельная консольная утилита внутри репозитория. Production-задача bridge:
+
+```text
+Zed stdio NDJSON ACP ↔ bridge ↔ router server transport
+```
+
+Bridge не знает providers, transcript, MCP policy или LSP. Он только проксирует кадры,
+держит stdout чистым и пишет диагностику в stderr.
+
+Проверены доступные toolchains:
+
+- Dart 3.13.1 — установлен, подходит для статического native binary через `dart compile exe`;
+- Go 1.26.7 — установлен;
+- Rust 1.94.1 — установлен.
+
+Предпочтение владельца — Dart. Начать с Dart bridge-прототипа и compile smoke test.
+

@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from "vitest";
 import { createAcpServer } from "../../open-sse/acp/server.js";
+import { upsertAcpDialogue } from "../../src/lib/db/repos/acpDialoguesRepo.js";
 
 const CWD = "/home/maxim/some-project";
 
@@ -26,7 +27,7 @@ function fakeChild(overrides = {}) {
 }
 
 // Collects every outbound frame; `handle` is awaited so ordering is exact.
-function harness({ openChild, modelCatalog, clientInfo } = {}) {
+function harness({ openChild, modelCatalog, clientInfo, dialogueDir } = {}) {
   const out = [];
   const server = createAcpServer({
     write: (frame) => out.push(frame),
@@ -34,6 +35,7 @@ function harness({ openChild, modelCatalog, clientInfo } = {}) {
     modelCatalog: modelCatalog ?? (() => [{ modelId: "codex-acp/gpt-5.4", name: "GPT 5.4" }]),
     log: () => {},
     clientInfo,
+    dialogueDir,
   });
   return { server, out };
 }
@@ -129,7 +131,8 @@ describe("ACP server M1 — session/new", () => {
     // The external id handed to Zed must never be the child's own id — that is
     // what keeps two dialogues from fusing when they share one child.
     expect(row.childSessionId).toBe("child-sess-1");
-    expect(row.transcript).toEqual([]);
+    expect(row.transcript).toBeDefined();
+    expect(typeof row.transcript.getAll).toBe("function");
   });
 
   it("keeps five tabs in one project as five separate dialogues (spec G3)", async () => {
@@ -198,10 +201,69 @@ describe("ACP server M1 — session/new", () => {
   });
 });
 
+describe("ACP server M4 — model configuration", () => {
+  it("forwards model change to child and preserves dialogue transcript", async () => {
+    let listener;
+    let request;
+    const child = fakeChild({
+      sendRpc: (method, params) => { request = { method, params }; setTimeout(() => listener({ id: 44, result: { configOptions: [{ id: "model" }] } }), 0); return 44; },
+      onMessage: (fn) => { listener = fn; },
+    });
+    const { server, out } = harness({ openChild: async () => child });
+    await init(server);
+    await server.handle({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: CWD } });
+    const sessionId = out[1].result.sessionId;
+    const row = server.dialogues.get(sessionId);
+    row.transcript.add({ type: "agent_message_chunk", content: "keep" });
+    await server.handle({ jsonrpc: "2.0", id: 3, method: "session/set_config_option", params: { sessionId, configId: "model", value: "gpt-5.4-mini" } });
+    expect(request).toEqual({ method: "session/set_config_option", params: { sessionId: "child-sess-1", configId: "model", value: "gpt-5.4-mini" } });
+    expect(out.at(-1)).toMatchObject({ id: 3, result: { configOptions: [{ id: "model" }] } });
+    expect(row.currentModel).toBe("gpt-5.4-mini");
+    expect(row.transcript.getAll()).toHaveLength(1);
+  });
+});
+
+describe("ACP server M3 — persistence and replay", () => {
+  it("persists transcript and replays it through session/load", async () => {
+      const first = harness();
+      await init(first.server);
+      await first.server.handle({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: CWD } });
+      const sessionId = first.out[1].result.sessionId;
+      const dialogue = first.server.dialogues.get(sessionId);
+      dialogue.transcript.add({ type: "agent_message_chunk", content: "saved" });
+      dialogue.cwd = CWD;
+      await upsertAcpDialogue({ id: sessionId, cwd: CWD, provider: dialogue.provider, currentModel: dialogue.currentModel, transcript: dialogue.transcript.getAll() });
+      const second = harness();
+      await second.server.handle({ jsonrpc: "2.0", id: 4, method: "session/load", params: { sessionId, cwd: CWD } });
+      expect(second.out).toEqual([
+        { jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { type: "agent_message_chunk", content: "saved" } } },
+        { jsonrpc: "2.0", id: 4, result: {} },
+      ]);
+      expect(second.server.dialogues.get(sessionId).transcript.getAll()).toHaveLength(1);
+  });
+
+  it("lists stored sessions by cwd and deletes them", async () => {
+      const { server, out } = harness();
+      await init(server);
+      await server.handle({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: CWD } });
+      const sessionId = out[1].result.sessionId;
+      const listed = [];
+      const originalWrite = (frame) => listed.push(frame);
+      const listedServer = createAcpServer({ write: originalWrite, openChild: async () => fakeChild() });
+      await listedServer.handle({ jsonrpc: "2.0", id: 3, method: "session/list", params: { cwd: CWD } });
+      expect(listed[0].result.sessions.map((s) => s.sessionId)).toContain(sessionId);
+      await listedServer.handle({ jsonrpc: "2.0", id: 4, method: "session/delete", params: { sessionId } });
+      expect(listed[1]).toMatchObject({ id: 4, result: {} });
+      listed.length = 0;
+      await listedServer.handle({ jsonrpc: "2.0", id: 5, method: "session/list", params: { cwd: CWD } });
+      expect(listed[0].result.sessions.map((s) => s.sessionId)).not.toContain(sessionId);
+  });
+});
+
 describe("ACP server M1 — transport hygiene", () => {
   it("replies method-not-found to an unknown request instead of hanging the client", async () => {
     const { server, out } = harness();
-    await server.handle({ jsonrpc: "2.0", id: 7, method: "session/prompt", params: { sessionId: "s" } });
+    await server.handle({ jsonrpc: "2.0", id: 7, method: "session/unknown", params: { sessionId: "s" } });
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({ id: 7, error: { code: -32601 } });
   });
@@ -236,5 +298,141 @@ describe("ACP server M1 — transport hygiene", () => {
     const b = harness({ clientInfo: { name: "9router", version: "0.5.99" } });
     await init(b.server);
     expect(b.out[0].result.agentInfo).toEqual({ name: "9router", version: "0.5.99" });
+  });
+});
+
+describe("ACP server M2 — session/prompt + streaming + ShadowTranscript", () => {
+  it("forwards session/prompt to child and streams session/update back", async () => {
+    let messageListener = null;
+    const mockChild = fakeChild({
+      sendRpc: (method, params) => {
+        if (method === "session/prompt") {
+          setTimeout(() => {
+            messageListener({ method: "session/update", params: { update: { type: "agent_message_chunk", content: "Hello" } } });
+            messageListener({ method: "session/update", params: { update: { type: "agent_message_chunk", content: " world" } } });
+            messageListener({ id: 123, result: { stopReason: "stop" } });
+          }, 10);
+          return 123;
+        }
+        return null;
+      },
+      onMessage: (listener) => {
+        messageListener = listener;
+      },
+    });
+
+    const { server, out } = harness({ openChild: async () => mockChild });
+    await init(server);
+    await server.handle({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "session/new",
+      params: { cwd: CWD },
+    });
+    const sessionId = out[1].result.sessionId;
+
+    await server.handle({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "session/prompt",
+      params: { sessionId, prompt: [{ type: "text", text: "hi" }] },
+    });
+
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(out.length).toBeGreaterThan(2);
+    const updatesSent = out.slice(2).filter((f) => f.method === "session/update");
+    expect(updatesSent.length).toBe(2);
+    expect(updatesSent[0].params.sessionId).toBe(sessionId);
+    expect(updatesSent[0].params.update.content).toBe("Hello");
+    expect(updatesSent[1].params.update.content).toBe(" world");
+
+    const response = out[out.length - 1];
+    expect(response.id).toBe(3);
+    expect(response.result.stopReason).toBe("stop");
+  });
+
+  it("accumulates session/update in the dialogue transcript", async () => {
+    let messageListener = null;
+    const mockChild = fakeChild({
+      sendRpc: (method, params) => {
+        if (method === "session/prompt") {
+          setTimeout(() => {
+            messageListener({ method: "session/update", params: { update: { type: "agent_message_chunk", content: "A" } } });
+            messageListener({ id: 123, result: { stopReason: "stop" } });
+          }, 10);
+          return 123;
+        }
+        return null;
+      },
+      onMessage: (listener) => {
+        messageListener = listener;
+      },
+    });
+
+    const { server } = harness({ openChild: async () => mockChild });
+    await init(server);
+    await server.handle({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "session/new",
+      params: { cwd: CWD },
+    });
+    const sessionId = server.dialogues.keys().next().value;
+
+    await server.handle({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "session/prompt",
+      params: { sessionId, prompt: [{ type: "text", text: "test" }] },
+    });
+
+    await new Promise(r => setTimeout(r, 50));
+
+    const dialogue = server.dialogues.get(sessionId);
+    expect(dialogue.transcript.getAll()).toHaveLength(1);
+    expect(dialogue.transcript.getAll()[0].content).toBe("A");
+  });
+
+  it("rejects session/prompt for unknown sessionId", async () => {
+    const { server, out } = harness();
+    await init(server);
+    await server.handle({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "session/prompt",
+      params: { sessionId: "unknown", prompt: [{ type: "text", text: "hi" }] },
+    });
+    expect(out.length).toBe(2);
+    expect(out[1].error.code).toBe(-32602);
+    expect(out[1].error.message).toContain("session not found");
+  });
+
+  it("rejects session/prompt without sessionId", async () => {
+    const { server, out } = harness();
+    await init(server);
+    await server.handle({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "session/prompt",
+      params: { prompt: [{ type: "text", text: "hi" }] },
+    });
+    expect(out.length).toBe(2);
+    expect(out[1].error.code).toBe(-32602);
+    expect(out[1].error.message).toContain("sessionId");
+  });
+
+  it("rejects session/prompt with non-array prompt", async () => {
+    const { server, out } = harness();
+    await init(server);
+    await server.handle({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "session/prompt",
+      params: { sessionId: "s", prompt: "not an array" },
+    });
+    expect(out.length).toBe(2);
+    expect(out[1].error.code).toBe(-32602);
+    expect(out[1].error.message).toContain("prompt array");
   });
 });

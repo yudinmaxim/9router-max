@@ -19,6 +19,8 @@
  * whole external contract testable against a fake child.
  */
 import { randomUUID } from "node:crypto";
+import { createShadowTranscript } from "./transcript.js";
+import { getAcpDialogueById, getAcpDialogues, upsertAcpDialogue, deleteAcpDialogue } from "../../src/lib/db/repos/acpDialoguesRepo.js";
 
 // Agent capabilities we can honestly advertise. loadSession is guaranteed by
 // our own ShadowTranscript (M3), not by the child, so it is always safe to
@@ -49,9 +51,27 @@ const INTERNAL_ERROR = -32603;
  * @param {object} [deps.clientInfo]            name/version echoed into initialize
  */
 export function createAcpServer({ write, openChild, modelCatalog, log = () => {}, clientInfo = {} }) {
-  // zedSessionId → { provider, currentModel, childSessionId, child, transcript }
+  // zedSessionId → { provider, currentModel, childSessionId, child, transcript, cwd }
   const dialogues = new Map();
+
+  async function persist(sessionId, dialogue) {
+    await upsertAcpDialogue({
+      id: sessionId,
+      cwd: dialogue.cwd,
+      provider: dialogue.provider,
+      currentModel: dialogue.currentModel,
+      transcript: dialogue.transcript.getAll(),
+    });
+  }
+
+  async function loadStored(sessionId) {
+    return getAcpDialogueById(sessionId);
+  }
   let clientCapabilities = {};
+
+  function sendNotification(method, params) {
+    send({ jsonrpc: "2.0", method, params });
+  }
 
   const send = (obj) => write(obj);
   const reply = (id, result) => send({ jsonrpc: "2.0", id, result });
@@ -99,8 +119,10 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
       currentModel: child.currentModel || "",
       childSessionId: child.sessionId,
       child,
-      transcript: [],
+      cwd,
+      transcript: createShadowTranscript(),
     });
+    await persist(zedSessionId, dialogues.get(zedSessionId));
     log("info", `session/new ${zedSessionId} → child ${child.provider}/${child.sessionId}`);
     reply(id, {
       sessionId: zedSessionId,
@@ -109,9 +131,130 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
     });
   }
 
+  async function onSessionPrompt(id, params) {
+    const sessionId = params?.sessionId;
+    const prompt = params?.prompt;
+    if (!sessionId) return fail(id, INVALID_PARAMS, "session/prompt requires a sessionId");
+    if (!Array.isArray(prompt)) return fail(id, INVALID_PARAMS, "session/prompt requires a prompt array");
+
+    const dialogue = dialogues.get(sessionId);
+    if (!dialogue) return fail(id, INVALID_PARAMS, "session not found");
+
+    const { child, childSessionId, transcript } = dialogue;
+
+    let promptResult = null;
+    let stopReason = null;
+
+    const onceResult = new Promise((resolve) => {
+      const handler = (msg) => {
+        if (msg.method === "session/update") {
+          const update = msg.params?.update || msg.params;
+          if (update) {
+            transcript.add(update);
+            persist(sessionId, dialogue).catch((err) => log("error", `dialogue persistence failed: ${err?.message || err}`));
+            sendNotification("session/update", { sessionId, update });
+          }
+        } else if (msg.id === promptResult) {
+          stopReason = msg.result?.stopReason || "stop";
+          child.onMessage(() => {});
+          resolve();
+        }
+      };
+      child.onMessage(handler);
+    });
+
+    promptResult = child.sendRpc("session/prompt", { sessionId: childSessionId, prompt });
+
+    if (!promptResult) {
+      child.onMessage(() => {});
+      return fail(id, INTERNAL_ERROR, "failed to send session/prompt to child");
+    }
+
+    await onceResult;
+
+    reply(id, { stopReason });
+  }
+
+  async function onSessionLoad(id, params) {
+    const sessionId = params?.sessionId;
+    if (!sessionId) return fail(id, INVALID_PARAMS, "session/load requires a sessionId");
+    const stored = await loadStored(sessionId);
+    if (!stored) return fail(id, INVALID_PARAMS, "session not found");
+    const transcript = createShadowTranscript();
+    for (const update of stored.transcript || []) transcript.add(update);
+    const dialogue = { ...stored, child: null, childSessionId: null, transcript };
+    dialogues.set(sessionId, dialogue);
+    for (const update of transcript.getAll()) sendNotification("session/update", { sessionId, update });
+    reply(id, {});
+  }
+
+  async function onSessionSetConfigOption(id, params) {
+    const sessionId = params?.sessionId;
+    const configId = params?.configId;
+    const value = params?.value;
+    if (!sessionId || !configId || value === undefined) {
+      return fail(id, INVALID_PARAMS, "session/set_config_option requires sessionId, configId and value");
+    }
+    const dialogue = dialogues.get(sessionId);
+    if (!dialogue) return fail(id, INVALID_PARAMS, "session not found");
+    if (!dialogue.child) return fail(id, INTERNAL_ERROR, "child session unavailable");
+
+    let responseId = null;
+    const result = new Promise((resolve) => {
+      dialogue.child.onMessage((msg) => {
+        if (msg.id === responseId) resolve(msg);
+      });
+    });
+    responseId = dialogue.child.sendRpc("session/set_config_option", {
+      sessionId: dialogue.childSessionId,
+      configId,
+      value,
+    });
+    if (!responseId) return fail(id, INTERNAL_ERROR, "failed to send config option to child");
+    const response = await result;
+    if (response.error) return fail(id, response.error.code || INTERNAL_ERROR, response.error.message || "child rejected config option");
+    if (configId === "model") {
+      dialogue.currentModel = value;
+      persist(sessionId, dialogue).catch((err) => log("error", `dialogue persistence failed: ${err?.message || err}`));
+    }
+    reply(id, response.result || {});
+  }
+
+  async function onSessionResume(id, params) {
+    const sessionId = params?.sessionId;
+    if (!sessionId || (!dialogues.has(sessionId) && !(await loadStored(sessionId)))) {
+      return fail(id, INVALID_PARAMS, "session not found");
+    }
+    reply(id, {});
+  }
+
+  async function onSessionList(id, params) {
+    const stored = await getAcpDialogues({ cwd: params?.cwd });
+    const sessions = stored.map(({ id: sessionId, cwd, currentModel, provider }) => ({
+      sessionId, cwd, title: `${provider}/${currentModel}`,
+    }));
+    reply(id, { sessions });
+  }
+
+  async function onSessionDelete(id, params) {
+    const sessionId = params?.sessionId;
+    if (!sessionId) return fail(id, INVALID_PARAMS, "session/delete requires a sessionId");
+    const dialogue = dialogues.get(sessionId);
+    await deleteAcpDialogue(sessionId);
+    dialogues.delete(sessionId);
+    dialogue?.child?.dispose?.();
+    reply(id, {});
+  }
+
   const handlers = {
     initialize: onInitialize,
     "session/new": onSessionNew,
+    "session/prompt": onSessionPrompt,
+    "session/load": onSessionLoad,
+    "session/resume": onSessionResume,
+    "session/set_config_option": onSessionSetConfigOption,
+    "session/list": onSessionList,
+    "session/delete": onSessionDelete,
   };
 
   /**
