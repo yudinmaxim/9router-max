@@ -117,6 +117,7 @@ export function createChildFactory({ providerId, spec, resolveContext = async ()
 
     return {
       provider,
+      connectionId: context.connectionId || null,
       sessionId,
       catalog,
       currentModel,

@@ -143,6 +143,14 @@ M0 закрыт коммитом `296905f0`. M1 закоммичен `e5581fc4`.
 
 ---
 
+## 2026-11-02 — Prefix/KV cache research
+
+9router cannot control or transfer provider-side KV tensors. Prefix caching remains upstream-owned. Live child reuse is compatible with prefix caching because one Codex child/thread survives across ACP prompts.
+
+Cheap invariants to preserve: no child respawn between prompts, no proxy/account/model switch inside active dialogue, no dynamic metadata injected into ACP prompts, and no interpretation of `usage_update.used/size` as token or cache usage.
+
+Research plan: inspect Codex stderr/debug and native Responses usage events for `input_tokens_details.cached_tokens` or equivalent; propagate native usage into `saveRequestUsage`; add normalization tests. If unavailable, use transcript/tokenizer estimates only as explicitly marked fallback.
+
 ## 2026-11-01 — ACP routing/accounting blocker
 
 Live Zed transport works, but ACP child traffic currently bypasses the normal 9router request lifecycle. `open-sse/acp/factory.js` calls `resolveSpawnPlan` with `proxyOptions: null` and spawns `codex-acp` directly. Therefore usage rows, dashboard request counters, connection/account attribution, provider/model routing, proxy resolution and normal request logging do not run for ACP turns.

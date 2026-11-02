@@ -21,6 +21,7 @@
 import { randomUUID } from "node:crypto";
 import { createShadowTranscript } from "./transcript.js";
 import { getAcpDialogueById, getAcpDialogues, upsertAcpDialogue, deleteAcpDialogue } from "../../src/lib/db/repos/acpDialoguesRepo.js";
+import { trackPendingRequest, saveRequestUsage } from "../../src/lib/usageDb.js";
 
 // Agent capabilities we can honestly advertise. loadSession is guaranteed by
 // our own ShadowTranscript (M3), not by the child, so it is always safe to
@@ -118,6 +119,7 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
     const zedSessionId = randomUUID();
     dialogues.set(zedSessionId, {
       provider: child.provider || "",
+      connectionId: child.connectionId || null,
       currentModel: child.currentModel || "",
       childSessionId: child.sessionId,
       child,
@@ -146,7 +148,8 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
     const { child, childSessionId, transcript } = dialogue;
     if (dialogue.promptInFlight) return fail(id, INVALID_PARAMS, "session/prompt already in progress");
     dialogue.promptInFlight = true;
-
+    const accountingModel = dialogue.currentModel || dialogue.provider || "default";
+    trackPendingRequest(accountingModel, dialogue.provider, dialogue.connectionId, true);
     let promptResult = null;
     let stopReason = null;
 
@@ -204,6 +207,16 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
       await onceResult;
       reply(id, { stopReason });
     } finally {
+      const status = stopReason === "end_turn" ? "200 OK" : "FAILED 502";
+      trackPendingRequest(accountingModel, dialogue.provider, dialogue.connectionId, false, status !== "200 OK");
+      saveRequestUsage({
+        provider: dialogue.provider,
+        model: accountingModel,
+        connectionId: dialogue.connectionId,
+        tokens: {},
+        status,
+        endpoint: "acp",
+      }).catch((err) => log("error", `ACP usage persistence failed: ${err?.message || err}`));
       dialogue.promptInFlight = false;
     }
   }

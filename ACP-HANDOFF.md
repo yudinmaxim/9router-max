@@ -37,6 +37,8 @@
 - M4: смена модели (same-provider vs cross-provider) + перенос + session/list.
 - M5: live-Zed (exp-worktree) + двунаправленный проброс (4 канала) + authMethods:[] — transport, permission и terminal smoke test пройдены 2026-11-01.
 - M6: routing/accounting integration — ACP child must enter normal model/connection/proxy/usage lifecycle before MCP work.
+- M6a: prefix/KV cache compatibility — preserve live child/thread, stable proxy/account/model, inspect Codex native usage/cache fields, then wire exact cached-token accounting if exposed.
+- M6b: estimated ACP usage fallback only if native usage is unavailable; mark estimates explicitly.
 - M7: hardening (redaction creds в реплее, MCP-PORT D1, права диска).
 
 ## Конвенции проекта (ОБЯЗАТЕЛЬНО)

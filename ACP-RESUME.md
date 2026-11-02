@@ -228,9 +228,166 @@ ACP session/prompt
 
 Прямой child spawn остаётся только transport proof, не production-ready routing.
 
+### Prefix/KV cache план
+
+Исследование показало: 9router не может управлять или переносить KV tensors. Prefix cache остаётся на стороне Codex/upstream. Текущая живая child-сессия уже сохраняет главное условие reuse.
+
+Дешёвые меры, заложенные сейчас:
+
+- не пересоздавать child между `session/prompt`;
+- не менять proxy/account внутри active dialogue;
+- не добавлять dynamic metadata в ACP prompt;
+- сохранить child session/thread ID;
+- считать `usage_update.used/size` только context occupancy, не token usage;
+- не записывать `used` как `cached_tokens`.
+
+Исследовательский план:
+
+1. Проверить stderr/debug Codex на native `response.completed`/`response.done` usage.
+2. Найти `input_tokens_details.cached_tokens` или аналогичный cache-read field.
+3. Протянуть native usage через ACP dialogue до `saveRequestUsage`.
+4. Добавить тесты cache usage normalization.
+5. Если native usage отсутствует — добавить отдельный estimated usage fallback через transcript/tokenizer с `estimated: true`.
+6. Не пытаться передавать KV cache ID или tensors через ACP.
+
 ### Ближайший шаг
 
-1. Найти обычный `/v1/chat/completions` lifecycle.
+1. Добавить focused test для ACP zero-token request в `tests/unit/acp-server-m1.test.js` или отдельный unit test.
+2. Проверить live dashboard `Recent Requests`: ACP row должен отображаться с `0 ↑ 0 ↓`.
+3. Проверить `connectionId`, provider, model, status в `usageHistory`.
+4. Закоммитить accounting/dashboard fix только после live-проверки.
+5. Исследовать Codex native usage events: stderr/debug, `response.completed`, `response.done`, `input_tokens_details.cached_tokens`.
+6. Протянуть exact usage до `saveRequestUsage`; не считать `usage_update.used/size` токенами.
+7. Добавить prefix-cache safeguards: live child/thread, стабильные proxy/account/model, без dynamic metadata в ACP prompt.
+8. Только после usage/routing перейти к MCP capability negotiation и MCP proxy на `PORT=20129`.
+9. Затем hardening: redaction, transcript permissions, DB isolation tests, cancel/error cleanup, cross-provider transfer.
+
+### Состояние последней сессии
+
+Комит transport/proxy:
+
+```text
+5be23baa feat: add ACP websocket bridge and proxy routing
+```
+
+Прокси проверен фактически через временный logger:
+
+```text
+scripts/acp-proxy-logger.js
+```
+
+Подтверждён маршрут:
+
+```text
+Zed → Dart stdio bridge → WebSocket :20129 → ACP façade → codex-acp → HTTP_PROXY/HTTPS_PROXY → proxy → upstream
+```
+
+Accounting уже добавлен, но ещё не закоммичен:
+
+```text
+open-sse/acp/factory.js
+- передаёт connectionId в child handle
+
+open-sse/acp/server.js
+- trackPendingRequest на start/end prompt
+- saveRequestUsage на завершение prompt
+- endpoint: "acp"
+- status: "200 OK" или "FAILED 502"
+- tokens: {} пока native usage не найден
+
+src/lib/db/repos/usageRepo.js
+- codex-acp zero-token rows не исключаются из recentRequests
+
+src/app/api/usage/request-logs/route.js
+- force-dynamic и Cache-Control: no-store
+
+src/shared/components/RequestLogger.js
+- fetch(..., { cache: "no-store" })
+```
+
+Проверено:
+
+```text
+cd tests && npm test -- --run unit/acp-server-m1.test.js
+24 tests passed
+node --check open-sse/acp/server.js
+node --check open-sse/acp/factory.js
+```
+
+DB проверка уже показала ACP row:
+
+```text
+provider: codex-acp
+endpoint: acp
+status: 200 OK
+promptTokens: 0
+completionTokens: 0
+```
+
+Важный dashboard bug найден и исправлен: `getUsageStats()` отбрасывал requests с нулевыми токенами. После этого live UI нужно проверить ещё раз.
+
+### Инструкции для нового harness
+
+Рабочая директория:
+
+```text
+/home/maxim/Projects/personal-projects/9router-max-exp
+```
+
+Ветка:
+
+```text
+acp-experiments
+```
+
+Не трогать:
+
+```text
+stable
+порт 20128
+9router.service
+```
+
+Перед работой:
+
+```bash
+git status --short
+git log -3 --oneline
+```
+
+Запуск exp server:
+
+```bash
+kill "$(ss -ltnp 'sport = :20129' | sed -n 's/.*pid=\([0-9]*\).*/\1/p')" 2>/dev/null || true
+ACP_TRACE=1 \
+PORT=20129 \
+NODE_OPTIONS='--experimental-loader=./alias-loader.mjs' \
+node custom-server.js
+```
+
+Тест ACP:
+
+```bash
+cd tests
+npm test -- --run unit/acp-server-m1.test.js
+```
+
+Ограничения:
+
+- не коммитить и не push без явного разрешения пользователя;
+- не использовать `used/size` как token usage;
+- не добавлять ACP-only fake counter;
+- не добавлять MCP до стабилизации usage/routing;
+- `acp-bridge/.dart_tool/`, `.serena/`, `tests/node_modules/` не добавлять в git.
+
+### Ближайшая команда
+
+```bash
+git diff --check
+cd tests && npm test -- --run unit/acp-server-m1.test.js
+```
+
+После этого — live prompt и проверка dashboard Recent Requests.
 2. Найти connection/model resolver и usage row writer.
 3. Найти proxyOptions builder.
 4. Передать resolved routing context в ACP factory.
