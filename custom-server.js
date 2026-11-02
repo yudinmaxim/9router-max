@@ -4,6 +4,8 @@ const fs = require("fs");
 const crypto = require("crypto");
 const { pathToFileURL } = require("url");
 
+let acpWebSocketAttached = false;
+
 const origCreate = http.createServer.bind(http);
 
 // Per-process secret proving x-9r-real-ip was stamped below rather than sent by the client.
@@ -75,6 +77,9 @@ http.createServer = (...args) => {
   const server = origCreate(...rest, wrapped);
   server.once("listening", () => {
     startBackgroundTokenRefreshFromCustomServer();
+    attachAcpWebSocketToServer(server).catch((err) => {
+      console.error("[ACP WebSocket] Failed to attach:", err && err.message ? err.message : err);
+    });
   });
   const origEmit = server.emit;
   // JBR 25 sends h2c upgrades that the HTTP/1.1 server would otherwise close.
@@ -124,6 +129,55 @@ http.createServer = (...args) => {
   };
   return server;
 };
+
+async function attachAcpWebSocketToServer(server) {
+  if (acpWebSocketAttached) return;
+  acpWebSocketAttached = true;
+
+  try {
+    const { attachAcpWebSocket } = await import(pathToFileURL(path.join(__dirname, "open-sse", "acp", "websocket.js")).href);
+    const { createChildFactory } = await import(pathToFileURL(path.join(__dirname, "open-sse", "acp", "factory.js")).href);
+    const { getExecutor } = await import(pathToFileURL(path.join(__dirname, "open-sse", "executors", "index.js")).href);
+    const { getProviderCredentials } = await import(pathToFileURL(path.join(__dirname, "src", "sse", "services", "auth.js")).href);
+
+    const providerId = "codex-acp";
+    const executor = getExecutor(providerId);
+    if (!executor?.acp) {
+      console.warn(`[ACP WebSocket] ${providerId} has no ACP spec, skipping WebSocket endpoint`);
+      return;
+    }
+
+    const factory = createChildFactory({
+      providerId,
+      spec: executor.acp,
+      resolveContext: async ({ providerId: id, model }) => {
+        const credentials = await getProviderCredentials(id, new Set(), model);
+        const data = credentials?.providerSpecificData || {};
+        return { context: { connectionId: credentials?.connectionId || null }, proxyOptions: {
+          connectionProxyEnabled: data.connectionProxyEnabled === true,
+          connectionProxyUrl: data.connectionProxyUrl || "",
+          connectionNoProxy: data.connectionNoProxy || "",
+          connectionProxyPoolId: data.connectionProxyPoolId || data.proxyPoolId || "",
+          strictProxy: data.strictProxy === true,
+          vercelRelayUrl: data.vercelRelayUrl || "",
+        } };
+      },
+      log: (level, message) => console.error(`[ACP WebSocket] [${level}] ${message}`),
+    });
+
+    attachAcpWebSocket(server, {
+      openChild: factory.openChild,
+      modelCatalog: () => [{ modelId: "codex-acp", name: "codex-acp", provider: "codex-acp" }],
+      log: (level, message) => console.error(`[ACP WebSocket] [${level}] ${message}`),
+      clientInfo: { name: "9router", version: "0.5.99" },
+    });
+
+    console.error("[ACP WebSocket] Attached to /api/acp/ws");
+  } catch (err) {
+    console.error("[ACP WebSocket] Attachment failed:", err && err.message ? err.message : err);
+    throw err;
+  }
+}
 
 if (require.main === module) {
   const standalone = path.join(__dirname, "server.js");

@@ -83,8 +83,7 @@ Standalone `node open-sse/acp/cli.js acp` не считать production path: �
 
 ```text
 20128 — stable 9router, не трогать
-20129 — текущая техническая копия 9router: dashboard, REST, OpenAI `/v1/*`
-20130 — ACP WebSocket listener для console bridge
+20129 — exp 9router: dashboard, REST, OpenAI `/v1/*`, ACP WebSocket
 ```
 
 `20129` — один exp-сервер и один порт для dashboard/REST/OpenAI и ACP WebSocket. ACP этап 1 использует хардкодный provider/model, чтобы сначала доказать полный маршрут. `20130` не использовать.
@@ -92,10 +91,10 @@ Standalone `node open-sse/acp/cli.js acp` не считать production path: �
 Полный поток:
 
 ```text
-Zed → stdio → Dart bridge → WebSocket :20130 → ACP server → provider agent CLI
+Zed → stdio → Dart bridge → WebSocket :20129 → ACP server → hardcoded codex-acp
 ```
 
-`20129` и `20130` — разные входы одного технического 9router процесса. `20128` не использовать.
+`20129` — один exp server entry для HTTP и WebSocket. `20128` не использовать.
 
 ### Dart bridge
 
@@ -145,14 +144,99 @@ Binary:
 acp-bridge/dist/9router-acp-bridge
 ```
 
-WebSocket endpoint пока не реализован, поэтому реальный bridge smoke test получил ожидаемый `SocketException: Connection refused`.
+WebSocket endpoint встроен в exp server `20129`. Bridge smoke test прошёл через реальный `codex-acp`:
+
+```text
+initialize → session/new → session/prompt → session/update → stopReason
+```
+
+Проверенный ответ через Dart bridge: `BRIDGE_OK`.
+
+### Проверенный live-Zed маршрут
+
+Zed подключён к native Dart bridge и работает через exp server. Проверено в реальном workspace:
+
+```text
+Zed stdio
+→ acp-bridge/dist/9router-acp-bridge
+→ ws://127.0.0.1:20129/api/acp/ws
+→ 9router ACP façade
+→ codex-acp
+```
+
+Проверено:
+
+- `initialize`, `session/new`, `session/prompt`;
+- streaming `session/update` без дублирования chunks;
+- `agent_message_chunk`, `usage_update`, `session_info_update`;
+- workspace read и shell commands;
+- `session/request_permission` child → Zed;
+- Zed permission response → child с сохранением JSON-RPC ID;
+- allow и reject permission outcomes;
+- command execution и terminal output;
+- отказ записи не создаёт файл;
+- Codex terminal output normalised в ACP `tool_call_update.content` с `type: "terminal"`.
+
+Фактический trace показал Codex extension:
+
+```json
+"_meta": {
+  "terminal_output_delta": {
+    "data": "...",
+    "terminal_id": "..."
+  }
+}
+```
+
+Router добавляет стандартный terminal content block, сохраняя исходный `_meta`.
+
+Для диагностики:
+
+```bash
+ACP_TRACE=1 PORT=20129 NODE_OPTIONS='--experimental-loader=./alias-loader.mjs' node custom-server.js
+```
+
+### Важный блокер перед routing
+
+Live ACP transport доказан, но child пока обходит обычный 9router request lifecycle.
+
+Текущая цепочка:
+
+```text
+ACP session/new → factory.js → resolveSpawnPlan(proxyOptions: null) → spawnAcpChild
+```
+
+Из-за этого ACP-запросы пока не попадают в:
+
+- usage DB и dashboard request counter;
+- connection/account attribution;
+- provider/model routing;
+- proxy resolver и proxy environment;
+- обычный request logging/cost accounting.
+
+Это нельзя чинить отдельным счётчиком в ACP façade. Нужен общий ACP child runtime:
+
+```text
+ACP session/prompt
+→ resolve provider/model/connection
+→ resolve proxyOptions
+→ create request/usage context
+→ spawn/reuse child with proxy env
+→ run ACP turn
+→ finalize usage/request record
+```
+
+Прямой child spawn остаётся только transport proof, не production-ready routing.
 
 ### Ближайший шаг
 
-1. Реализовать серверный ACP endpoint в runtime 9router.
-2. Подключить к нему Dart bridge.
-3. Прогнать `initialize → session/new → session/prompt` через реальный WebSocket.
-4. Только потом добавлять Zed smoke test.
+1. Найти обычный `/v1/chat/completions` lifecycle.
+2. Найти connection/model resolver и usage row writer.
+3. Найти proxyOptions builder.
+4. Передать resolved routing context в ACP factory.
+5. Добавить usage/proxy integration tests.
+6. Только после этого продолжить MCP/tool traffic.
+7. Удалить диагностический `alias-loader.mjs` из production startup path после выбора штатного runtime hook.
 
 Не коммитить и не пушить без разрешения пользователя.
 

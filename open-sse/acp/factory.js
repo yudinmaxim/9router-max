@@ -24,7 +24,7 @@ const PROTOCOL_VERSION = 1;
  * @param {object} options.spec        ACP spec from executor.acp (exe, envVar, …)
  * @param {(level: string, msg: string) => void} [options.log]
  */
-export function createChildFactory({ providerId, spec, log = () => {} }) {
+export function createChildFactory({ providerId, spec, resolveContext = async () => ({}), log = () => {} }) {
   const provider = providerId;
 
   /**
@@ -35,15 +35,23 @@ export function createChildFactory({ providerId, spec, log = () => {} }) {
    * @param {Array} opts.mcpServers    MCP servers to register (empty array for now)
    * @returns {Promise<ChildHandle>}
    */
-  async function openChild({ cwd, mcpServers }) {
+  async function openChild({ cwd, mcpServers, model = "default" }) {
+    const { context = {}, proxyOptions = null } = await resolveContext({ providerId, model, cwd });
+    log("info", `ACP context resolved: ${JSON.stringify({ providerId, model, proxyEnabled: proxyOptions?.connectionProxyEnabled === true })}`);
     const { exe, args, envVar, versionsDir, extraDirs, adapter } = spec;
 
-    const { env, proxyTrace, bin } = await resolveSpawnPlan({
+    const { env: resolvedEnv, proxyTrace, bin } = await resolveSpawnPlan({
       acp: spec,
       providerId,
-      proxyOptions: null,
-      log,
+      proxyOptions,
+      log: {
+        info: (...args) => log("info", args.join(" ")),
+        warn: (...args) => log("warn", args.join(" ")),
+        debug: (...args) => log("debug", args.join(" ")),
+      },
     });
+    const env = { ...resolvedEnv };
+    if (env.NODE_OPTIONS?.includes("alias-loader.mjs")) delete env.NODE_OPTIONS;
 
     const spawnArgs = args || ["acp"];
     const { cmd, shell } = agentSpawnCommand(bin, spawnArgs);
@@ -55,6 +63,7 @@ export function createChildFactory({ providerId, spec, log = () => {} }) {
       cwd,
       shell,
     });
+    child.stderr?.on("data", (chunk) => log("debug", `ACP child stderr: ${chunk.toString().trim()}`));
 
     const core = createAcpClientCore({
       child,
@@ -65,10 +74,21 @@ export function createChildFactory({ providerId, spec, log = () => {} }) {
     let catalog = [];
     let currentModel = null;
 
+    let sessionNewId = null;
+    let initializeId = null;
+    const onceInitialized = new Promise((resolve, reject) => {
+      const onMessage = (msg) => {
+        if (msg.id !== initializeId) return;
+        if (msg.error) reject(new Error(msg.error.message || "child initialize failed"));
+        else resolve();
+      };
+      core.onMessage(onMessage);
+    });
     const onceSessionNew = new Promise((resolve, reject) => {
       const onMessage = (msg) => {
-        if (msg.method === "session/new" && !sessionResult) {
-          sessionResult = msg.params?.result || msg.result;
+        if (msg.id === sessionNewId && !sessionResult) {
+          if (msg.error) return reject(new Error(msg.error.message || "child session/new failed"));
+          sessionResult = msg.result || msg.params?.result;
           catalog = collectModelCatalog(sessionResult);
           currentModel = currentAgentModel(sessionResult);
           resolve();
@@ -77,13 +97,15 @@ export function createChildFactory({ providerId, spec, log = () => {} }) {
       core.onMessage(onMessage);
     });
 
-    core.sendRpc("initialize", {
+    initializeId = core.sendRpc("initialize", {
       protocolVersion: PROTOCOL_VERSION,
       clientInfo: { name: "9router", version: "1.0" },
       capabilities: {},
     });
 
-    const sessionNewId = core.sendRpc("session/new", { cwd, mcpServers });
+    if (!initializeId) throw new Error("failed to send initialize request");
+    await onceInitialized;
+    sessionNewId = core.sendRpc("session/new", { cwd, mcpServers });
 
     if (!sessionNewId) {
       throw new Error("failed to send session/new request");
@@ -100,6 +122,7 @@ export function createChildFactory({ providerId, spec, log = () => {} }) {
       currentModel,
       configOptions: sessionResult?.configOptions,
       sendRpc: core.sendRpc,
+      sendRpcRaw: core.sendRpcRaw,
       onMessage: core.onMessage,
       dispose: core.dispose,
     };

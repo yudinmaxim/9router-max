@@ -1,5 +1,7 @@
-import { machineIdSync } from 'node-machine-id';
+import { createRequire } from 'node:module';
 import fs from 'node:fs';
+
+const { machineIdSync } = createRequire(import.meta.url)('node-machine-id');
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DATA_DIR } from '@/lib/dataDir';

@@ -17,7 +17,7 @@
 
 ## Ключевые архитектурные решения (зафиксированы в спеке, НЕ переигрывать)
 
-- **Транспорт:** stdio-процесс по контракту Zed `agent_servers {command, args}`. НЕ TCP/HTTP-порт. Логи — строго в stderr.
+- **Транспорт:** Zed-facing stdio Dart bridge; bridge-facing WebSocket `ws://127.0.0.1:20129/api/acp/ws`; 9router и WebSocket живут в одном exp server process. Логи bridge — строго в stderr. Standalone Node ACP process не production path.
 - **Изоляция диалогов:** первичный ключ — **внешний `zedSessionId`** (неизменяемый, переживает рестарт). НЕ `(cwd,model,provider)`, НЕ child-процесс (ACP разрешает мультиплекс — смешаем диалоги). Маппинг: `zedSessionId → {provider, currentModel, childSessionId (мутабельный), poolKey, transcript}`.
 - **Модель вне ключа пула** (G4): hopping между моделями одного провайдера сохраняет child и контекст; смена провайдера = новый child + **однократный** перенос transcript.
 - **Смена модели** идёт через `session/set_config_option {configId:"model"}` — НЕ `session/set_model` (наш слой его не использует; см. acpBase.js:15,752,994).
@@ -35,8 +35,9 @@
 - M2: session/prompt + стриминг + ShadowTranscript.
 - M3: session/load + persistence + resume.
 - M4: смена модели (same-provider vs cross-provider) + перенос + session/list.
-- M5: live-Zed (exp-worktree) + двунаправленный проброс (4 канала) + authMethods:[].
-- M6: hardening (redaction creds в реплее, MCP-PORT D1, права диска).
+- M5: live-Zed (exp-worktree) + двунаправленный проброс (4 канала) + authMethods:[] — transport, permission и terminal smoke test пройдены 2026-11-01.
+- M6: routing/accounting integration — ACP child must enter normal model/connection/proxy/usage lifecycle before MCP work.
+- M7: hardening (redaction creds в реплее, MCP-PORT D1, права диска).
 
 ## Конвенции проекта (ОБЯЗАТЕЛЬНО)
 

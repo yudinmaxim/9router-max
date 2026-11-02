@@ -53,6 +53,7 @@ const INTERNAL_ERROR = -32603;
 export function createAcpServer({ write, openChild, modelCatalog, log = () => {}, clientInfo = {} }) {
   // zedSessionId → { provider, currentModel, childSessionId, child, transcript, cwd }
   const dialogues = new Map();
+  const childRequests = new Map();
 
   async function persist(sessionId, dialogue) {
     await upsertAcpDialogue({
@@ -76,6 +77,7 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
   const send = (obj) => write(obj);
   const reply = (id, result) => send({ jsonrpc: "2.0", id, result });
   const fail = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, message } });
+  const respondToChild = (dialogue, id, result) => dialogue.child?.sendRpcRaw?.({ jsonrpc: "2.0", id, result });
 
   // Render a child catalog into the ACP `models` shape so Zed can show a
   // picker. currentModelId must be one of availableModels or Zed shows an
@@ -121,6 +123,7 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
       child,
       cwd,
       transcript: createShadowTranscript(),
+      promptInFlight: false,
     });
     await persist(zedSessionId, dialogues.get(zedSessionId));
     log("info", `session/new ${zedSessionId} → child ${child.provider}/${child.sessionId}`);
@@ -141,38 +144,68 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
     if (!dialogue) return fail(id, INVALID_PARAMS, "session not found");
 
     const { child, childSessionId, transcript } = dialogue;
+    if (dialogue.promptInFlight) return fail(id, INVALID_PARAMS, "session/prompt already in progress");
+    dialogue.promptInFlight = true;
 
     let promptResult = null;
     let stopReason = null;
 
+    let unsubscribePrompt = null;
     const onceResult = new Promise((resolve) => {
       const handler = (msg) => {
+        if (msg.method && msg.id !== undefined && msg.id !== null) {
+          childRequests.set(msg.id, dialogue);
+          const paramsOut = { ...(msg.params || {}), sessionId };
+          if (msg.method === "session/request_permission" && paramsOut.toolCall?.rawInput?.command) {
+            paramsOut.toolCall = {
+              ...paramsOut.toolCall,
+              title: paramsOut.toolCall.rawInput.command,
+            };
+          }
+          send({ jsonrpc: "2.0", id: msg.id, method: msg.method, params: paramsOut });
+          return;
+        }
         if (msg.method === "session/update") {
           const update = msg.params?.update || msg.params;
           if (update) {
-            transcript.add(update);
+            const output = update._meta?.terminal_output_delta;
+            const rawInput = update.rawInput;
+            const rawContent = rawInput
+              ? [{ type: "content", content: { type: "text", text: `Raw input:\n${JSON.stringify(rawInput, null, 2)}` } }]
+              : [];
+            const content = output
+              ? [{ type: "terminal", terminalId: output.terminal_id }]
+              : rawInput
+                ? [...(Array.isArray(update.content) ? update.content : []), ...rawContent]
+                : update.content;
+            const normalized = content && content !== update.content ? { ...update, content } : update;
+            transcript.add(normalized);
             persist(sessionId, dialogue).catch((err) => log("error", `dialogue persistence failed: ${err?.message || err}`));
-            sendNotification("session/update", { sessionId, update });
+            sendNotification("session/update", { sessionId, update: normalized });
           }
         } else if (msg.id === promptResult) {
           stopReason = msg.result?.stopReason || "stop";
-          child.onMessage(() => {});
+          unsubscribePrompt?.();
           resolve();
         }
       };
-      child.onMessage(handler);
+      unsubscribePrompt = child.onMessage(handler);
     });
 
     promptResult = child.sendRpc("session/prompt", { sessionId: childSessionId, prompt });
 
     if (!promptResult) {
-      child.onMessage(() => {});
+      unsubscribePrompt?.();
+      dialogue.promptInFlight = false;
       return fail(id, INTERNAL_ERROR, "failed to send session/prompt to child");
     }
 
-    await onceResult;
-
-    reply(id, { stopReason });
+    try {
+      await onceResult;
+      reply(id, { stopReason });
+    } finally {
+      dialogue.promptInFlight = false;
+    }
   }
 
   async function onSessionLoad(id, params) {
@@ -182,7 +215,7 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
     if (!stored) return fail(id, INVALID_PARAMS, "session not found");
     const transcript = createShadowTranscript();
     for (const update of stored.transcript || []) transcript.add(update);
-    const dialogue = { ...stored, child: null, childSessionId: null, transcript };
+    const dialogue = { ...stored, child: null, childSessionId: null, transcript, promptInFlight: false };
     dialogues.set(sessionId, dialogue);
     for (const update of transcript.getAll()) sendNotification("session/update", { sessionId, update });
     reply(id, {});
@@ -220,6 +253,41 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
     reply(id, response.result || {});
   }
 
+  async function onSessionCancel(id, params) {
+    const sessionId = params?.sessionId;
+    const dialogue = dialogues.get(sessionId);
+    if (!dialogue?.child) {
+      if (id !== undefined && id !== null) fail(id, INVALID_PARAMS, "session not found");
+      return;
+    }
+    let requestId = null;
+    let unsubscribe = null;
+    const result = new Promise((resolve) => {
+      unsubscribe = dialogue.child.onMessage((msg) => {
+        if (msg.id !== requestId) return;
+        unsubscribe?.();
+        resolve(msg);
+      });
+    });
+    requestId = dialogue.child.sendRpc("session/cancel", { sessionId: dialogue.childSessionId });
+    log("info", `session/cancel ${sessionId} → child ${dialogue.childSessionId} request=${requestId ?? "failed"}`);
+    if (!requestId) {
+      unsubscribe?.();
+      if (id !== undefined && id !== null) return fail(id, INTERNAL_ERROR, "failed to send session/cancel to child");
+      return;
+    }
+    if (id === undefined || id === null) {
+      unsubscribe?.();
+      dialogue.promptInFlight = false;
+      return;
+    }
+    const response = await result;
+    log("info", `session/cancel child response ${sessionId} request=${requestId}`);
+    dialogue.promptInFlight = false;
+    if (response.error) return fail(id, response.error.code || INTERNAL_ERROR, response.error.message || "child rejected session/cancel");
+    reply(id, response.result || {});
+  }
+
   async function onSessionResume(id, params) {
     const sessionId = params?.sessionId;
     if (!sessionId || (!dialogues.has(sessionId) && !(await loadStored(sessionId)))) {
@@ -250,6 +318,7 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
     initialize: onInitialize,
     "session/new": onSessionNew,
     "session/prompt": onSessionPrompt,
+    "session/cancel": onSessionCancel,
     "session/load": onSessionLoad,
     "session/resume": onSessionResume,
     "session/set_config_option": onSessionSetConfigOption,
@@ -264,8 +333,17 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
    */
   async function handle(message) {
     const { id, method, params } = message || {};
+    if (!method && id !== undefined && id !== null) {
+      const dialogue = childRequests.get(id);
+      if (dialogue) {
+        childRequests.delete(id);
+        dialogue.child?.sendRpcRaw?.({ ...message, id });
+      }
+      return;
+    }
     const isRequest = id !== undefined && id !== null;
     const handler = handlers[method];
+    if (!isRequest && method !== "session/cancel") return;
     if (!handler) {
       if (isRequest) fail(id, METHOD_NOT_FOUND, `method not found: ${method}`);
       return;

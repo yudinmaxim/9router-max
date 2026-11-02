@@ -59,6 +59,7 @@ import os from "node:os";
 import fs from "node:fs";
 import { BaseExecutor } from "../base.js";
 import { createAcpClientCore, spawnAcpChild } from "./acpClientCore.js";
+import { ensureAcpAdapter } from "./acpAdapter.js";
 import { acpSessionKey, acquireAcpSession, peekAcpSession, findAcpSession, putAcpSession, markAcpSessionDead } from "./acpSessionPool.js";
 import { resolveConversationKey } from "../../utils/sessionManager.js";
 import { resolveWorkspaceCwd, buildPromptText, extractMessages, extractImageUrls, estimateTokens, agentSpawnCommand } from "./acpCommon.js";

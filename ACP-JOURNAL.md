@@ -143,6 +143,32 @@ M0 закрыт коммитом `296905f0`. M1 закоммичен `e5581fc4`.
 
 ---
 
+## 2026-11-01 — ACP routing/accounting blocker
+
+Live Zed transport works, but ACP child traffic currently bypasses the normal 9router request lifecycle. `open-sse/acp/factory.js` calls `resolveSpawnPlan` with `proxyOptions: null` and spawns `codex-acp` directly. Therefore usage rows, dashboard request counters, connection/account attribution, provider/model routing, proxy resolution and normal request logging do not run for ACP turns.
+
+Do not add an ACP-only counter. Reuse the normal request lifecycle: resolve provider/model/connection, build proxy options, create usage context, spawn/reuse child with proxy environment, then finalize usage accounting after the ACP turn. ACP remains transport proof until this integration is complete.
+
+Next archaeology targets: `/v1/chat/completions` handler, model/connection resolver, proxy options builder and usage row writer.
+
+## 2026-11-01 — live Zed smoke test
+
+Проверен полный маршрут в реальном Zed workspace `/home/maxim/Projects/personal-projects/9router-max-exp` через native Dart bridge и exp server `20129`.
+
+Проверено:
+
+- initialize/session lifecycle/prompt;
+- потоковые `session/update` без дублей;
+- workspace read и terminal commands;
+- child `session/request_permission` → Zed → child response;
+- allow/reject permission outcomes;
+- command execution и terminal output;
+- отказ записи не создаёт файл.
+
+Codex присылает terminal output в `_meta.terminal_output_delta`. Router добавляет ACP-compatible `tool_call_update.content` с `type: "terminal"`, не удаляя исходный `_meta`. Это исправило пустой terminal output panel в Zed.
+
+Диагностический trace включается `ACP_TRACE=1`. Стандартный route доказан. MCP и `session/cancel` ещё не проверены.
+
 ## 2026-10-31 — план расширения ACP и bridge
 
 Текущая серверная façade достаточна для первичной проверки связки на fake child и подготовки smoke-теста. Lifecycle сам по себе недостаточен для полноценной IDE-работы.

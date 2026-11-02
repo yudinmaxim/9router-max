@@ -44,35 +44,74 @@
 
 ## 3. Не-цели (явно)
 
-- N1. Не делаем 9router MCP-сервером для агентов в этом этапе. `fs/*`/`terminal/*`/elicitation —
-  только **двунаправленный проброс** child↔Zed без собственной обработки (см. §7 «Принцип прозрачности»).
-- N2. Не трогаем основной рабочий инстанс (порт 20128, `stable`). Только exp-worktree/порт 20229+.
-- N3. Не решаем вопрос ToS OpenAI/Codex здесь — см. §9 (риск-контейнер), он остаётся на пользователе.
-- N4. Не строим web-UI для ACP-порта.
+- N1. Не делаем 9router MCP-сервером и не строим server-side tool loop на первом этапе. MCP/FS/terminal/permission/IDE requests прозрачно пробрасываются между child ACP и Zed, пока protocol trace не уточнит точные формы.
+- N2. Не трогаем stable на `20128`. Exp 9router работает на `20129`; ACP WebSocket использует тот же сервер и порт.
+- N3. Не решаем вопрос ToS OpenAI/Codex здесь — он остаётся на пользователе.
+- N4. Не добавляем provider/model switching и context compression до рабочего end-to-end smoke test.
+- N5. Не строим отдельный web-UI для ACP.
 
 ---
 
-## 4. Транспорт (решено по контракту Zed)
+## 4. Транспорт и этапы реализации
 
-Контракт Zed External Agent (`zed.dev/docs/ai/external-agents`): агент задаётся как
+Zed видит один External Agent, но stdio держит отдельный bridge. 9router не запускается как
+standalone ACP-процесс: он остаётся обычным сервером и добавляет WebSocket endpoint.
 
 ```json
 "agent_servers": {
-  "9router": { "type": "custom", "command": "node", "args": ["<entry>", "acp"], "env": {} }
+  "9router": {
+    "type": "custom",
+    "command": "9router-acp-bridge",
+    "args": [],
+    "env": {}
+  }
 }
 ```
 
-То есть **stdio-процесс**, а не TCP/HTTP-порт. «Второй порт» из обсуждения — это метафора:
-второй вход процесса. Реализация:
+Портовая схема:
 
-- Новый исполняемый вход `src/cli/acp-agent.js` (или `open-sse/acp/server.js`) — читает
-  newline-delimited JSON-RPC из stdin, пишет в stdout, логи — строго в stderr.
-- Запускается как `node <entry> acp`. Тот же процесс может быть собран в standalone-cli
-  (`cli/app`), но в этом этапе — отдельный thin-вход поверх `open-sse`.
+```text
+20128 — stable 9router, не трогать
+20129 — exp 9router: dashboard, REST, OpenAI `/v1/*`, ACP WebSocket
+```
 
-**Почему не WS/HTTP:** Zed спавнит stdio. WS потребовал бы отдельный долгоживущий сервер и
-обход `killAllAppProcesses` (cli.js убивает все 9router-процессы при старте — см. память проекта).
-Stdio-вход изолирован и не конфликтует с REST-сервером.
+```text
+Zed
+  → stdio ACP
+  → Dart bridge
+  → WebSocket ws://127.0.0.1:20129/api/acp/ws
+  → AcpAgentServer
+  → hardcoded real ACP agent CLI
+  → AcpAgentServer
+  → WebSocket
+  → Dart bridge
+  → Zed
+```
+
+Bridge — тупой transport adapter. Он не знает provider, model, transcript, MCP policy или LSP.
+`AcpAgentServer` живёт внутри 9router runtime и использует `AcpClientCore` для child CLI.
+Второй Next instance, второй 9router process и порт `20130` не используются.
+
+### Этап 1 — рабочий маршрут
+
+Provider и model хардкодны: `codex-acp` и default model child. Цель — end-to-end smoke test:
+`initialize`, session lifecycle, prompt/update, files, permission requests, terminal/commands,
+MCP/tool messages и все фактические IDE/LSP-related frames, которые пришлёт Zed.
+
+Живой Dart bridge обязателен: через него подключается Zed и записывается реальный ACP trace.
+Методы и capabilities не выдумывать до получения trace.
+
+### Этап 2 — routing и контекст
+
+После рабочего маршрута добавить по trace:
+
+- provider/model resolution по составному model ID;
+- same-agent model switch;
+- cross-agent child replacement;
+- shadow transcript persistence и transfer;
+- controlled context compression с записью результата в transcript;
+- MCP/fs/terminal/permission hardening;
+- LSP extensions, если Zed действительно использует их через ACP.
 
 ---
 

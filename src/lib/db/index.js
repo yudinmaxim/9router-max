@@ -41,6 +41,11 @@ export {
   setMcpServerTestStatus, resolveMcpServerForProxy,
 } from "./repos/mcpServersRepo.js";
 
+// ACP shadow transcripts
+export {
+  getAcpDialogueById, getAcpDialogues, upsertAcpDialogue, deleteAcpDialogue,
+} from "./repos/acpDialoguesRepo.js";
+
 // API keys
 export {
   getApiKeys, getApiKeyById, getApiKeyByKey, createApiKey, updateApiKey, deleteApiKey, validateApiKey,

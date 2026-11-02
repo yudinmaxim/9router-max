@@ -268,10 +268,27 @@ describe("ACP server M1 — transport hygiene", () => {
     expect(out[0]).toMatchObject({ id: 7, error: { code: -32601 } });
   });
 
-  it("never answers a notification", async () => {
-    const { server, out } = harness();
-    await server.handle({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: "s" } });
-    expect(out).toHaveLength(0);
+  it("forwards session/cancel notifications to the child without replying", async () => {
+    let listener = null;
+    const sent = [];
+    const child = fakeChild({
+      sendRpc: (method, params) => {
+        sent.push({ method, params });
+        return 7;
+      },
+      onMessage: (next) => {
+        listener = next;
+        return () => { listener = null; };
+      },
+    });
+    const { server, out } = harness({ openChild: async () => child });
+    await init(server);
+    await server.handle({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: CWD } });
+    const sessionId = out[1].result.sessionId;
+    await server.handle({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
+    expect(sent.at(-1)).toMatchObject({ method: "session/cancel", params: { sessionId: child.sessionId } });
+    expect(out).toHaveLength(2);
+    expect(listener).toBeNull();
   });
 
   it("survives a handler that throws, still replying exactly once", async () => {
