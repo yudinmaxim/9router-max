@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import PropTypes from "prop-types";
 import { Card, Button, Select } from "@/shared/components";
 import { useNotificationStore } from "@/store/notificationStore";
+import AcpAgentCard from "./AcpAgentCard";
+import { PROVIDERS } from "open-sse/config/providers.js";
 
 const ACTIONS = ["read", "search", "edit", "move", "delete", "execute", "fetch", "other"];
 const VALUE_OPTIONS = [
@@ -124,7 +126,7 @@ export default function AcpPermissionsCard({ providerId }) {
         className="w-full flex items-center justify-between text-left"
       >
         <div>
-          <h2 className="text-lg font-semibold">ACP Permissions</h2>
+          <h2 className="text-lg font-semibold">ACP Configuration — {PROVIDERS[providerId]?.name || providerId}</h2>
           <p className="text-sm text-text-muted">
             {hasOverride
               ? "This provider overrides the router default."
@@ -136,7 +138,13 @@ export default function AcpPermissionsCard({ providerId }) {
 
       {expanded && (
         <div className="mt-4 space-y-4">
-          <table className="w-full text-sm">
+          <section>
+            <h3 className="mb-2 text-sm font-semibold">Default model and models</h3>
+            <AcpAgentCard providerId={providerId} />
+          </section>
+          <section>
+            <h3 className="mb-2 text-sm font-semibold">Permissions</h3>
+            <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-text-muted border-b border-surface-3">
                 <th className="py-2 pr-4 font-medium">Action</th>
@@ -165,7 +173,8 @@ export default function AcpPermissionsCard({ providerId }) {
                 </tr>
               ))}
             </tbody>
-          </table>
+            </table>
+          </section>
           <div className="flex items-center gap-2">
             <Button onClick={save} disabled={saving}>
               {saving ? "Saving…" : "Save"}

@@ -9,14 +9,16 @@
  *
  * Shape:
  *   acpAgents[providerId] = {
- *     enabledModels: string[],   // published to /v1/models; absent = "use the registry list"
+ *     enabledModels: string[],   // published models; absent = use agent catalog
+ *     defaultModel: string|null,  // selected on new router ACP sessions
+ *     modelNames: { [modelId]: string }, // display labels; IDs stay provider-qualified
  *     defaults: { mode, collaboration_mode, thought_level, ... }  // applied per session
  *   }
  */
 
 import { getSettings, updateSettings } from "@/lib/localDb";
 
-const EMPTY = { enabledModels: null, defaults: {} };
+const EMPTY = { enabledModels: null, defaultModel: null, modelNames: {}, defaults: {} };
 
 /**
  * @returns {Promise<{enabledModels: string[]|null, defaults: Record<string, string>}>}
@@ -29,6 +31,8 @@ export async function getAcpAgentSettings(providerId) {
   const entry = settings.acpAgents?.[providerId] || {};
   return {
     enabledModels: Array.isArray(entry.enabledModels) ? entry.enabledModels : null,
+    defaultModel: typeof entry.defaultModel === "string" ? entry.defaultModel : null,
+    modelNames: entry.modelNames && typeof entry.modelNames === "object" ? entry.modelNames : {},
     defaults: entry.defaults && typeof entry.defaults === "object" ? entry.defaults : {},
   };
 }
@@ -50,6 +54,10 @@ export async function saveAcpAgentSettings(providerId, patch) {
   const next = { ...current };
   if (patch.enabledModels !== undefined) {
     next.enabledModels = Array.isArray(patch.enabledModels) ? patch.enabledModels : null;
+  }
+  if (patch.defaultModel !== undefined) next.defaultModel = typeof patch.defaultModel === "string" ? patch.defaultModel : null;
+  if (patch.modelNames !== undefined && patch.modelNames && typeof patch.modelNames === "object") {
+    next.modelNames = Object.fromEntries(Object.entries(patch.modelNames).filter(([id, name]) => typeof id === "string" && typeof name === "string" && name.trim()).map(([id, name]) => [id, name.trim()]));
   }
   if (patch.defaults !== undefined) {
     next.defaults = { ...(current.defaults || {}), ...(patch.defaults || {}) };

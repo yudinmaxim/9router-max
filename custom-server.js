@@ -140,34 +140,51 @@ async function attachAcpWebSocketToServer(server) {
     const { getExecutor } = await import(pathToFileURL(path.join(__dirname, "open-sse", "executors", "index.js")).href);
     const { getProviderCredentials } = await import(pathToFileURL(path.join(__dirname, "src", "sse", "services", "auth.js")).href);
 
-    const providerId = "codex-acp";
-    const executor = getExecutor(providerId);
-    if (!executor?.acp) {
-      console.warn(`[ACP WebSocket] ${providerId} has no ACP spec, skipping WebSocket endpoint`);
-      return;
+    const acpProviders = ["codex-acp", "cursor-acp", "opencode-acp", "omp-acp"];
+    const { getModelsByProviderId } = await import(pathToFileURL(path.join(__dirname, "open-sse", "config", "providerModels.js")).href);
+    const factories = new Map();
+    const resolveProvider = (model) => {
+      const value = typeof model === "string" ? model : "";
+      const match = acpProviders.find((id) => value === id || value.startsWith(`${id}/`));
+      return match || "codex-acp";
+    };
+    const resolveContext = async ({ providerId: id, model }) => {
+      const credentials = await getProviderCredentials(id, new Set(), model);
+      const data = credentials?.providerSpecificData || {};
+      return { context: { connectionId: credentials?.connectionId || null }, proxyOptions: {
+        connectionProxyEnabled: data.connectionProxyEnabled === true,
+        connectionProxyUrl: data.connectionProxyUrl || "",
+        connectionNoProxy: data.connectionNoProxy || "",
+        connectionProxyPoolId: data.connectionProxyPoolId || data.proxyPoolId || "",
+        strictProxy: data.strictProxy === true,
+        vercelRelayUrl: data.vercelRelayUrl || "",
+      } };
+    };
+    for (const providerId of acpProviders) {
+      const executor = getExecutor(providerId);
+      if (!executor?.acp) continue;
+      factories.set(providerId, createChildFactory({
+        providerId,
+        spec: executor.acp,
+        resolveContext,
+        log: (level, message) => console.error(`[ACP WebSocket] [${level}] ${message}`),
+      }));
     }
-
-    const factory = createChildFactory({
-      providerId,
-      spec: executor.acp,
-      resolveContext: async ({ providerId: id, model }) => {
-        const credentials = await getProviderCredentials(id, new Set(), model);
-        const data = credentials?.providerSpecificData || {};
-        return { context: { connectionId: credentials?.connectionId || null }, proxyOptions: {
-          connectionProxyEnabled: data.connectionProxyEnabled === true,
-          connectionProxyUrl: data.connectionProxyUrl || "",
-          connectionNoProxy: data.connectionNoProxy || "",
-          connectionProxyPoolId: data.connectionProxyPoolId || data.proxyPoolId || "",
-          strictProxy: data.strictProxy === true,
-          vercelRelayUrl: data.vercelRelayUrl || "",
-        } };
-      },
-      log: (level, message) => console.error(`[ACP WebSocket] [${level}] ${message}`),
+    const modelCatalog = () => acpProviders.flatMap((provider) => {
+      const models = getModelsByProviderId(provider);
+      return models.length
+        ? models.map(({ id, name }) => ({ modelId: `${provider}/${id}`, name: name || id, provider }))
+        : [{ modelId: provider, name: provider, provider }];
     });
 
     attachAcpWebSocket(server, {
-      openChild: factory.openChild,
-      modelCatalog: () => [{ modelId: "codex-acp", name: "codex-acp", provider: "codex-acp" }],
+      openChild: (opts) => {
+        const provider = resolveProvider(opts.model);
+        const factory = factories.get(provider);
+        if (!factory) throw new Error(`ACP provider unavailable: ${provider}`);
+        return factory.openChild({ ...opts, model: opts.model?.split("/").slice(1).join("/") || "default" });
+      },
+      modelCatalog,
       log: (level, message) => console.error(`[ACP WebSocket] [${level}] ${message}`),
       clientInfo: { name: "9router", version: "0.5.99" },
     });

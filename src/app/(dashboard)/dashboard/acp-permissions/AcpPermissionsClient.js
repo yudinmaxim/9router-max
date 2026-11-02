@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { Card, Button, Select, Toggle } from "@/shared/components";
 import { PROVIDERS } from "open-sse/config/providers.js";
+import { getProviderAlias } from "@/shared/constants/providers";
+import AcpAgentCard from "../providers/[id]/AcpAgentCard";
 
 // Every provider that spawns a local agent over ACP. Keyed off the registry's
 // `localAgent` flag, not an id suffix — devin-cli drives a local agent too, and
@@ -42,6 +44,7 @@ export default function AcpPermissionsClient() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [availableProviders, setAvailableProviders] = useState([]);
 
   // Async fetch inside the effect: setState runs in the promise continuation,
   // never synchronously in the effect body.
@@ -54,6 +57,17 @@ export default function AcpPermissionsClient() {
         if (cancelled) return;
         setDefaults(data.defaults || {});
         setProviders(data.providers || []);
+        const checks = await Promise.all(ACP_PROVIDERS.map(async (providerId) => {
+          try {
+            const response = await fetch(`/api/acp-agents/${encodeURIComponent(providerId)}`, { cache: "no-store" });
+            if (!response.ok) return null;
+            const agent = await response.json();
+            if (!agent?.installed || !agent.catalog?.models?.length) return null;
+            const disabled = await fetch(`/api/models/disabled?providerAlias=${encodeURIComponent(getProviderAlias(providerId))}`, { cache: "no-store" }).then((r) => r.ok ? r.json() : { ids: [] });
+            return agent.catalog.models.some((model) => !disabled.ids?.includes(model.id)) ? providerId : null;
+          } catch { return null; }
+        }));
+        setAvailableProviders(checks.filter(Boolean));
       } catch {
         if (!cancelled) setError("Could not load permissions");
       } finally {
@@ -156,12 +170,21 @@ export default function AcpPermissionsClient() {
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-text-main">ACP agent permissions</h1>
+        <h1 className="text-2xl font-semibold text-text-main">ACP Configuration</h1>
         <p className="mt-1 text-sm text-text-muted">
           When a CLI agent wants to use a tool it asks the router, and waits. There is nobody to
           ask here, so the router answers from these rules. Denying is safe — the agent marks the
           tool failed and finishes the turn.
         </p>
+      </div>
+
+      <div className="space-y-6">
+        {availableProviders.map((providerId) => (
+          <section key={providerId}>
+            <h2 className="mb-2 text-lg font-semibold text-text-main">{PROVIDERS[providerId]?.name || providerId}</h2>
+            <AcpAgentCard providerId={providerId} />
+          </section>
+        ))}
       </div>
 
       <Card className="p-5 space-y-4">

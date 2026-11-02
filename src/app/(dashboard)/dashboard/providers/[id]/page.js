@@ -46,7 +46,9 @@ export default function ProviderDetailPage() {
   // approve an action on the machine, and only those have an availability to
   // measure. devin-cli qualifies — it speaks ACP from its own binary but never
   // carried the `-acp` suffix, so a suffix test silently skipped it.
-  const isLocalAgent = !!FREE_PROVIDERS[providerId]?.localAgent;
+  const isLocalAgent = !!FREE_PROVIDERS[providerId]?.localAgent
+    || providerId.endsWith("-acp")
+    || providerId === "cxc";
   const { getCaps } = useModelCaps();
   const [connections, setConnections] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -81,6 +83,7 @@ export default function ProviderDetailPage() {
   const [liveModels, setLiveModels] = useState([]);
   // Live-catalog fetch warning/error (surfaced for zed only; cursor behavior unchanged).
   const [liveModelsError, setLiveModelsError] = useState(null);
+  const [syncingAcpModels, setSyncingAcpModels] = useState(false);
   const [kiloFreeModels, setKiloFreeModels] = useState([]);
   const [disabledModelIds, setDisabledModelIds] = useState([]);
   const [confirmState, setConfirmState] = useState(null);
@@ -163,9 +166,7 @@ export default function ProviderDetailPage() {
   const supportsApiKeyAuth = !!APIKEY_PROVIDERS[providerId] || authModes.includes("apikey");
   const isFreeNoAuth = !!FREE_PROVIDERS[providerId]?.noAuth;
   const staticModels = getModelsByProviderId(providerId);
-  const models = providerId === "zed" && liveModels.length > 0
-    ? liveModels
-    : staticModels;
+  const models = isLocalAgent ? liveModels : (providerId === "zed" && liveModels.length > 0 ? liveModels : staticModels);
   const providerAlias = getProviderAlias(providerId);
   
   const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
@@ -482,10 +483,26 @@ export default function ProviderDetailPage() {
   // the provider id or connection list changes — no polling, no loop.
   // Cursor path is statement-identical to before; zed adds error surfacing.
   useEffect(() => {
-    const isLiveCatalog = providerId === "cursor" || providerId === "zed";
+    const isLiveCatalog = providerId === "cursor" || providerId === "zed" || isLocalAgent;
     if (!isLiveCatalog) {
       setLiveModels([]);
       return;
+    }
+
+    if (isLocalAgent) {
+      let cancelled = false;
+      fetch(`/api/acp-agents/${encodeURIComponent(providerId)}`, { cache: "no-store" })
+        .then(async (res) => ({ ok: res.ok, data: await res.json().catch(() => null) }))
+        .then(({ ok, data }) => {
+          if (cancelled) return;
+          if (ok && Array.isArray(data?.catalog?.models)) {
+            setLiveModels(data.catalog.models);
+            return;
+          }
+          setLiveModels([]);
+        })
+        .catch(() => { if (!cancelled) setLiveModels([]); });
+      return () => { cancelled = true; };
     }
 
     const connection = connections.find((item) => item.isActive !== false);
@@ -520,6 +537,21 @@ export default function ProviderDetailPage() {
 
     return () => { cancelled = true; };
   }, [providerId, connections]);
+
+  const syncAcpModels = async () => {
+    setSyncingAcpModels(true);
+    setLiveModelsError(null);
+    try {
+      const res = await fetch(`/api/acp-agents/${encodeURIComponent(providerId)}/catalog?sync=1`, { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || "Failed to sync ACP models");
+      setLiveModels(Array.isArray(data?.models) ? data.models : []);
+    } catch (error) {
+      setLiveModelsError(error.message);
+    } finally {
+      setSyncingAcpModels(false);
+    }
+  };
 
   // Fetch suggested models from provider's public API (if configured)
   useEffect(() => {
@@ -1761,7 +1793,7 @@ export default function ProviderDetailPage() {
       {/* Agent setup: which of the agent's own models to publish, and the
           options pinned on every session. Replaces the "nothing to configure"
           dead end a noAuth provider used to end at. */}
-      {isLocalAgent && <AcpAgentCard providerId={providerId} />}
+
 
       {/* Models */}
       <Card>
@@ -1804,7 +1836,15 @@ export default function ProviderDetailPage() {
               </div>
             );
           })()}
+          {isLocalAgent && (
+            <Button size="sm" variant="secondary" icon="sync" onClick={syncAcpModels} disabled={syncingAcpModels}>
+              {syncingAcpModels ? "Syncing…" : "Sync from ACP"}
+            </Button>
+          )}
         </div>
+        {isLocalAgent && !!liveModelsError && (
+          <p className="mb-3 text-xs text-red-500 break-words">{liveModelsError}</p>
+        )}
         {!!modelsTestError && (
           <div className="mb-3">
             <p className="text-xs text-red-500 break-words">{modelsTestError}</p>

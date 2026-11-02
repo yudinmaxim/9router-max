@@ -71,6 +71,14 @@ export async function PUT(request, { params }) {
       }
     }
 
+    if (body.defaultModel !== undefined) {
+      if (body.defaultModel !== null && typeof body.defaultModel !== "string") return NextResponse.json({ error: "defaultModel must be a string or null" }, { status: 400 });
+      patch.defaultModel = body.defaultModel;
+    }
+    if (body.modelNames !== undefined) {
+      if (!body.modelNames || typeof body.modelNames !== "object" || Array.isArray(body.modelNames)) return NextResponse.json({ error: "modelNames must be an object" }, { status: 400 });
+      patch.modelNames = body.modelNames;
+    }
     if (body.defaults !== undefined) {
       patch.defaults = sanitizeDefaults(body.defaults);
     }

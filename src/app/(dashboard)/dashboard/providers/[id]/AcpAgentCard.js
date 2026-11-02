@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from "react";
 import PropTypes from "prop-types";
 import { Card, Badge, Button } from "@/shared/components";
+import { getProviderAlias } from "@/shared/constants/providers";
 import AcpStatusBadge from "../components/AcpStatusBadge";
 
 const OPTIONS_TO_SHOW = ["mode", "collaboration_mode", "thought_level"];
@@ -37,6 +38,9 @@ export default function AcpAgentCard({ providerId }) {
   const [installed, setInstalled] = useState(null);
   const [catalog, setCatalog] = useState(null);
   const [enabledModels, setEnabledModels] = useState(null);
+  const [defaultModel, setDefaultModel] = useState(null);
+  const [modelNames, setModelNames] = useState({});
+  const [providerDisabledModels, setProviderDisabledModels] = useState([]);
   const [defaults, setDefaults] = useState({});
   const [syncing, setSyncing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -49,8 +53,12 @@ export default function AcpAgentCard({ providerId }) {
       if (!res.ok) return;
       const data = await res.json();
       setInstalled(Boolean(data.installed));
+       const disabled = await fetch(`/api/models/disabled?providerAlias=${encodeURIComponent(getProviderAlias(providerId))}`).then((r) => r.ok ? r.json() : { ids: [] });
+       setProviderDisabledModels(disabled.ids || []);
       setCatalog(data.catalog || null);
       setEnabledModels(Array.isArray(data.enabledModels) ? data.enabledModels : null);
+      setDefaultModel(data.defaultModel || null);
+      setModelNames(data.modelNames || {});
       setDefaults(data.defaults || {});
     } catch {
       /* keep whatever is on screen */
@@ -99,7 +107,9 @@ export default function AcpAgentCard({ providerId }) {
           return false;
         }
         setEnabledModels(Array.isArray(data.enabledModels) ? data.enabledModels : null);
-        setDefaults(data.defaults || {});
+        setDefaultModel(data.defaultModel || null);
+       setModelNames(data.modelNames || {});
+       setDefaults(data.defaults || {});
         setSavedFlash(true);
         setTimeout(() => setSavedFlash(false), 1500);
         return true;
@@ -117,6 +127,19 @@ export default function AcpAgentCard({ providerId }) {
     save({ enabledModels: next });
   };
 
+  const chooseDefaultModel = (value) => {
+    setDefaultModel(value || null);
+    save({ defaultModel: value || null });
+  };
+
+  const setModelName = (id, value) => {
+    const next = { ...modelNames };
+    if (value.trim()) next[id] = value.trim();
+    else delete next[id];
+    setModelNames(next);
+    save({ modelNames: next });
+  };
+
   const setDefault = (configId, value) => {
     const next = { ...defaults };
     if (!value) delete next[configId];
@@ -125,7 +148,7 @@ export default function AcpAgentCard({ providerId }) {
     save({ defaults: next });
   };
 
-  const models = catalog?.models || [];
+  const models = (catalog?.models || []).filter((model) => !providerDisabledModels.includes(model.id));
   // Match on the category, not the id: Codex reports reasoning as
   // { id: "reasoning_effort", category: "thought_level" }, so an id-only
   // filter drops the one option most operators want to change.
@@ -158,7 +181,7 @@ export default function AcpAgentCard({ providerId }) {
       )}
 
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-medium text-text-main">Models</p>
+        <p className="text-sm font-medium text-text-main">Models shared through ACP</p>
         <Button size="sm" variant="secondary" icon="sync" onClick={sync} disabled={syncing || !installed}>
           {syncing ? "Syncing…" : "Sync from agent"}
         </Button>
@@ -180,7 +203,14 @@ export default function AcpAgentCard({ providerId }) {
             )}
           </p>
 
-          <div className="mt-3 flex flex-col gap-1.5">
+          <label className="mt-3 block text-sm font-medium">Default model
+             <select value={defaultModel || ""} onChange={(e) => chooseDefaultModel(e.target.value)} disabled={saving} className="mt-1 w-full rounded border border-border bg-transparent px-2 py-2 text-sm">
+               <option value="">Agent default</option>
+               {models.map((model) => <option key={model.id} value={model.id}>{modelNames[model.id] || model.name || model.id}</option>)}
+             </select>
+           </label>
+
+           <div className="mt-3 flex flex-col gap-1.5">
             {models.map((model) => {
               const on = selected.includes(model.id);
               return (
@@ -188,20 +218,17 @@ export default function AcpAgentCard({ providerId }) {
                   key={model.id}
                   className="flex items-center gap-3 rounded-lg border border-border px-3 py-2 cursor-pointer hover:bg-sidebar/50"
                 >
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    onChange={() => toggleModel(model.id)}
-                    disabled={saving}
-                    className="accent-[var(--color-primary)]"
-                  />
+                  <button type="button" onClick={() => toggleModel(model.id)} disabled={saving} className={`rounded px-2 py-1 text-xs font-medium ${on ? "bg-success/15 text-success" : "bg-bg-subtle text-text-muted"}`}>
+                    {on ? "Вкл" : "Выкл"}
+                  </button>
                   <span className="flex-1 min-w-0">
-                    <span className="block text-sm font-medium truncate">{model.name || model.id}</span>
+                    <span className="block text-sm font-medium truncate">{modelNames[model.id] || model.name || model.id}</span>
                     {model.description && (
                       <span className="block text-xs text-text-muted truncate">{model.description}</span>
                     )}
                   </span>
-                  <code className="text-xs text-text-muted font-mono">{model.id}</code>
+                  <input value={modelNames[model.id] || ""} placeholder="Display name" onChange={(e) => setModelName(model.id, e.target.value)} disabled={saving} className="w-36 rounded border border-border bg-transparent px-2 py-1 text-xs" />
+                   <code className="text-xs text-text-muted font-mono">{model.id}</code>
                   {model.current && <Badge variant="success" size="sm">agent default</Badge>}
                 </label>
               );

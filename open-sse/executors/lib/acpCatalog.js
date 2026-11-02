@@ -123,9 +123,13 @@ export function probeAcpCatalog(bin, spec, extraEnv = {}, timeoutMs = PROBE_TIME
       child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
 
     try {
+      const childEnv = { ...process.env, ...extraEnv };
+      // Router NODE_OPTIONS may point at alias-loader.mjs in project root.
+      // Standalone ACP adapter must not inherit that loader.
+      delete childEnv.NODE_OPTIONS;
       child = spawn(bin, args, {
         stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, ...extraEnv },
+        env: childEnv,
         cwd: process.env.HOME || process.cwd(),
       });
     } catch (error) {

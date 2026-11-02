@@ -109,9 +109,10 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
     const cwd = typeof params?.cwd === "string" ? params.cwd : "";
     if (!cwd) return fail(id, INVALID_PARAMS, "session/new requires a cwd");
     const mcpServers = Array.isArray(params?.mcpServers) ? params.mcpServers : [];
+    const requestedModel = typeof params?.model === "string" ? params.model : undefined;
     let child;
     try {
-      child = await openChild({ cwd, mcpServers });
+      child = await openChild({ cwd, mcpServers, model: requestedModel });
     } catch (err) {
       log("error", `session/new openChild failed: ${err?.message || err}`);
       return fail(id, INTERNAL_ERROR, `failed to open agent session: ${err?.message || err}`);

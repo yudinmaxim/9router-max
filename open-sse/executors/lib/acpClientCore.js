@@ -21,8 +21,12 @@ import { createAcpTransport } from "./acpTransport.js";
  * stored credentials, so injecting anything here would override them.
  */
 export function spawnAcpChild({ cmd, args, env, cwd, shell }) {
+  const childEnv = { ...env };
+  // Next's alias loader belongs to router process. ACP CLIs cannot resolve it
+  // from their own working directory and die before sending initialize.
+  delete childEnv.NODE_OPTIONS;
   return spawn(cmd, args, {
-    env,
+    env: childEnv,
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
     shell,

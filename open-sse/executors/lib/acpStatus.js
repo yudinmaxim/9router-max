@@ -113,6 +113,9 @@ function readVerdict(providerId) {
   if (!dir) return null;
   try {
     const verdict = JSON.parse(fs.readFileSync(path.join(dir, "verdict.json"), "utf8"));
+    // Old verdicts may come from probes that inherited router-only NODE_OPTIONS
+    // and failed on alias-loader.mjs. Force one fresh probe after that fix.
+    if (String(verdict.detail || "").includes("alias-loader.mjs")) return null;
     return Date.now() - (verdict.measuredAt || 0) <= ACP_VERDICT_TTL_MS ? verdict : null;
   } catch {
     return null;
