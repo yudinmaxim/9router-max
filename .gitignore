@@ -110,7 +110,7 @@ acp-bridge/.dart_tool/
 acp-bridge/build/
 
 # Local test scratch deps
-tests/node_modules/
+tests/node_modules
 
 # ACP docs (override docs/* ignore)
 !docs/ACP-SERVER-SPEC.md
