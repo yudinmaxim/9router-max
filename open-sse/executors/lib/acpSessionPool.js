@@ -15,6 +15,17 @@ function disposeAcpSession(entry) {
   if (!entry || entry.disposed) return;
   entry.disposed = true;
   try { entry.onDispose?.(); } catch { /* best effort; the OS reaps tmpdir */ }
+  // Pool owns child lifetime. Disposal previously cleaned only tool state,
+  // leaving Codex app-server descendants alive after session replacement/expiry.
+  try {
+    if (entry.child && !entry.child.killed && entry.child.exitCode === null) {
+      entry.child.kill("SIGTERM");
+      const timer = setTimeout(() => {
+        if (!entry.child.killed && entry.child.exitCode === null) entry.child.kill("SIGKILL");
+      }, 2000);
+      timer.unref?.();
+    }
+  } catch { /* already dead */ }
 }
 
 export function peekAcpSession(key) {

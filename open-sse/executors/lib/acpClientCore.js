@@ -124,6 +124,20 @@ export function createAcpClientCore({ child = null, transport = null, trace = nu
     } catch {
       /* already gone */
     }
+    // Closing stdio transport does not reliably reap ACP child. Provider
+    // switching can otherwise leave one Bun process per model selection until
+    // Linux refuses another worker thread.
+    try {
+      if (activeChild && !activeChild.killed) {
+        activeChild.kill("SIGTERM");
+        const timer = setTimeout(() => {
+          if (!activeChild.killed) activeChild.kill("SIGKILL");
+        }, 2000);
+        timer.unref?.();
+      }
+    } catch {
+      /* already gone */
+    }
   };
 
   return {
