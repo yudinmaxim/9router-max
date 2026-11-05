@@ -253,7 +253,7 @@ export function HideProviderButton({ providerId, name, onHide }) {
         e.stopPropagation();
         onHide(providerId);
       }}
-      className="absolute right-2 top-2 z-10 rounded-md p-1 text-text-muted opacity-0 transition-all hover:bg-surface hover:text-text-main focus:opacity-100 group-hover:opacity-100"
+      className="absolute left-2 top-2 z-10 rounded-md p-1 text-text-muted opacity-0 transition-all hover:bg-surface hover:text-text-main focus:opacity-100 group-hover:opacity-100"
     >
       <span className="material-symbols-outlined text-[14px]">visibility_off</span>
     </button>

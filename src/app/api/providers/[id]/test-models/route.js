@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getProviderConnectionById } from "@/lib/localDb";
 import { getProviderModels, PROVIDER_ID_TO_ALIAS } from "open-sse/config/providerModels.js";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
+import { isProviderDisabled } from "@/lib/disabledProviders.js";
 import { UPDATER_CONFIG } from "@/shared/constants/config";
 import { pingModelByKind } from "@/app/api/models/test/ping";
 
@@ -21,6 +22,11 @@ export async function POST(request, { params }) {
     const providerId = connection.provider;
     const isCompatible = isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
     const alias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
+
+    // A disabled provider must not be tested
+    if (isProviderDisabled(providerId)) {
+      return NextResponse.json({ error: "Provider is disabled" }, { status: 403 });
+    }
 
     let models = getProviderModels(alias);
 

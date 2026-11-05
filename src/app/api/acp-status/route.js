@@ -3,6 +3,7 @@ import { PROVIDERS } from "open-sse/config/providers.js";
 import { getExecutor } from "open-sse/executors/index.js";
 import { probeAcpAgent, ACP_STATUS, clearAcpStatusCache, clearAcpVerdict } from "open-sse/executors/lib/acpStatus.js";
 import { installAcpAdapter, getAdapterInstallInfo } from "open-sse/executors/lib/acpAdapter.js";
+import { isProviderDisabled } from "@/lib/disabledProviders.js";
 
 export const dynamic = "force-dynamic";
 // npm install of an adapter is a real install, not a cache read.
@@ -66,6 +67,10 @@ export async function POST(request) {
   try {
     const body = await request.json().catch(() => ({}));
     const providerId = String(body.provider || "").trim();
+
+    if (isProviderDisabled(providerId)) {
+      return NextResponse.json({ error: `Provider ${providerId} is disabled` }, { status: 403 });
+    }
 
     if (!ACP_PROVIDERS.includes(providerId)) {
       return NextResponse.json(

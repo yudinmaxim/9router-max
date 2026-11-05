@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSettings, updateSettings } from "@/lib/localDb";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { resetComboRotation } from "open-sse/services/combo.js";
+import { setDisabledProviders } from "@/lib/disabledProviders.js";
 import bcrypt from "bcryptjs";
 
 export const dynamic = "force-dynamic";
@@ -77,6 +78,11 @@ export async function PATCH(request) {
     }
 
     const settings = await updateSettings(body);
+
+    // Sync in-memory disabled providers cache immediately
+    if (Object.prototype.hasOwnProperty.call(body, "disabledProviders")) {
+      setDisabledProviders(body.disabledProviders);
+    }
 
     // Apply outbound proxy settings immediately (no restart required)
     if (

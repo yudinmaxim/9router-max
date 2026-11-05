@@ -3,6 +3,7 @@ import {
   getProviderConnections,
   updateProviderConnection,
 } from "@/lib/localDb";
+import { isProviderDisabled } from "@/lib/disabledProviders.js";
 
 const MODEL_LOCK_PREFIX = "modelLock_";
 
@@ -26,6 +27,11 @@ export async function GET() {
 
     for (const connection of connections) {
       const locks = getActiveModelLocks(connection);
+
+      // Disabled providers are hidden from /api/models; their lock badges
+      // would surface detail for a provider no list shows, so drop them too.
+      if (isProviderDisabled(connection.provider)) continue;
+
       for (const lock of locks) {
         models.push({
           provider: connection.provider,

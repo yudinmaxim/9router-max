@@ -8,6 +8,7 @@ import {
   saveAcpAgentSettings,
   sanitizeDefaults,
 } from "@/lib/acpAgents";
+import { isProviderDisabled } from "@/lib/disabledProviders.js";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +51,10 @@ export async function PUT(request, { params }) {
   try {
     if (!isAcpProvider(providerId)) {
       return NextResponse.json({ error: `${providerId} is not an ACP agent` }, { status: 400 });
+    }
+
+    if (isProviderDisabled(providerId)) {
+      return NextResponse.json({ error: `Provider ${providerId} is disabled` }, { status: 403 });
     }
 
     const body = await request.json().catch(() => ({}));

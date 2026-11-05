@@ -102,6 +102,16 @@ graphify-out/*
 start-dev-silent.cjs
 debug.log
 
+# Serena MCP working state
+.serena/
+
+# Dart build artifacts (acp-bridge)
+acp-bridge/.dart_tool/
+acp-bridge/build/
+
+# Local test scratch deps
+tests/node_modules/
+
 # ACP docs (override docs/* ignore)
 !docs/ACP-SERVER-SPEC.md
 !docs/ACP-HANDOFF.md

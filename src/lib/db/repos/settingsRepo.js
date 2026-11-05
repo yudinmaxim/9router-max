@@ -72,6 +72,8 @@ const DEFAULT_SETTINGS = {
   acpPermissions: {},
   // Per-provider overrides: { [providerId]: { [action]: { inside, outside } } }
   acpPermissionsByProvider: {},
+  // Disabled provider ids (synced to in-memory cache in disabledProviders.js)
+  disabledProviders: [],
 };
 
 async function readRaw() {

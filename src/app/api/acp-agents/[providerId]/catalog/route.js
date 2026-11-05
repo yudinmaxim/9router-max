@@ -3,6 +3,7 @@ import { PROVIDERS } from "open-sse/config/providers.js";
 import { getExecutor } from "open-sse/executors/index.js";
 import { resolveInstalledBin } from "open-sse/executors/lib/acpStatus.js";
 import { getAcpCatalog } from "open-sse/executors/lib/acpCatalog.js";
+import { isProviderDisabled } from "@/lib/disabledProviders.js";
 
 export const dynamic = "force-dynamic";
 // A cold probe spawns the agent and walks its handshake.
@@ -27,6 +28,10 @@ export async function GET(request, { params }) {
   try {
     if (!isAcpProvider(providerId)) {
       return NextResponse.json({ error: `${providerId} is not an ACP agent` }, { status: 400 });
+    }
+
+    if (isProviderDisabled(providerId)) {
+      return NextResponse.json({ error: `Provider ${providerId} is disabled` }, { status: 403 });
     }
 
     const spec = getExecutor(providerId)?.acp;

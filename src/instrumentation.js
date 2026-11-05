@@ -10,5 +10,11 @@ export async function register() {
 
     const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");
     startModelCatalogSync();
+
+    // Seed the in-memory disabled-providers cache from the persistent store
+    const { getSettings } = await import("@/lib/localDb.js");
+    const { setDisabledProviders } = await import("@/lib/disabledProviders.js");
+    const settings = await getSettings();
+    setDisabledProviders(settings.disabledProviders || []);
   }
 }

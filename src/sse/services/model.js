@@ -3,6 +3,8 @@ import { getModelAliases, getComboByName, getProviderNodes } from "@/lib/localDb
 import { parseModel as parseModelCore, resolveModelAliasFromMap, getModelInfoCore } from "open-sse/services/model.js";
 import REGISTRY from "open-sse/providers/registry/index.js";
 import { KNOWN_PROVIDER_IDS } from "open-sse/providers/known.js";
+import { resolveProviderId } from "@/shared/constants/providers.js";
+import { isProviderDisabled } from "@/lib/disabledProviders.js";
 
 // Local provider alias overrides (HMR-friendly, applied on top of open-sse map)
 const LOCAL_PROVIDER_ALIASES = {
@@ -104,7 +106,14 @@ export async function getComboModels(modelStr) {
 
   const combo = await getComboByName(modelStr);
   if (combo && combo.models && combo.models.length > 0) {
-    return combo.models;
+    // A turned-off provider must not be reachable through a combo either:
+    // drop its seats here, the single point through which every combo
+    // (including nested ones, which re-enter this function) is expanded.
+    return combo.models.filter((seat) => {
+      if (typeof seat !== "string" || !seat.includes("/")) return true;
+      const alias = seat.slice(0, seat.indexOf("/"));
+      return !isProviderDisabled(resolveProviderId(alias));
+    });
   }
   return null;
 }

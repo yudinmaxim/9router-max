@@ -1,4 +1,6 @@
 import { PROVIDER_MODELS } from "@/shared/constants/models";
+import { ALIAS_TO_ID } from "@/shared/constants/providers";
+import { isProviderDisabled } from "@/lib/disabledProviders.js";
 
 /**
  * Handle CORS preflight
@@ -36,6 +38,7 @@ export async function GET() {
     }
     
     for (const [provider, providerModels] of Object.entries(PROVIDER_MODELS)) {
+      if (isProviderDisabled(ALIAS_TO_ID[provider] || provider)) continue;
       for (const model of providerModels) {
         addModel({
           name: `models/${provider}/${model.id}`,

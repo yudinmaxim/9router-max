@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getProviderConnections } from "@/lib/localDb";
 import { backfillCodexEmails } from "@/lib/oauth/providers";
 import { FREE_PROVIDERS, USAGE_APIKEY_PROVIDERS, USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
+import { isProviderDisabled } from "@/lib/disabledProviders.js";
 
 const SAFE_FIELDS = [
   "id", "provider", "authType", "name", "email", "displayName",
@@ -44,6 +45,9 @@ function sanitize(c) {
 }
 
 function isUsageEligible(connection) {
+  // A provider the operator turned off is absent from every list, usage
+  // included — its history stays in the DB but the card is gone from the page.
+  if (isProviderDisabled(connection.provider)) return false;
   if (!USAGE_SUPPORTED_PROVIDERS.includes(connection.provider)) return false;
   // The key-bearing list covers providers that authenticate with an api key.
   // The agent providers (cursor-acp, opencode-acp, …) are the mirror case: they

@@ -4,6 +4,7 @@ import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLock
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import { NOAUTH_CONNECTION_ID as SHARED_NOAUTH_CONNECTION_ID } from "@/shared/constants/noauth.js";
+import { isProviderDisabled } from "@/lib/disabledProviders.js";
 import { getAntigravityQuotaCache, getAntigravityModelQuota } from "./antigravityQuota.js";
 import * as log from "../utils/logger.js";
 
@@ -47,6 +48,15 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
 
     // Resolve alias to provider ID (e.g., "kc" -> "kilocode")
     const providerId = resolveProviderId(provider);
+
+    // A provider the operator turned off must not reach upstream through ANY
+    // path. Checked here — the single chokepoint every dispatch passes through —
+    // and before the noAuth branch below, otherwise free/ACP agents (omp-acp,
+    // cursor-acp, devin-cli...) would keep spawning with synthetic credentials.
+    if (isProviderDisabled(providerId)) {
+      log.warn("AUTH", `${providerId} is disabled — refusing credentials`);
+      return null;
+    }
 
     // Inject a virtual connection for no-auth free providers (with optional proxy pool from settings).
     // It must honour excludeSet like a real connection does: the account-fallback loop

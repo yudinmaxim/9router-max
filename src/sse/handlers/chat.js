@@ -27,6 +27,8 @@ import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
 import { enforceStepBudget } from "../services/stepBudget.js";
+import { isProviderDisabled } from "@/lib/disabledProviders.js";
+import { resolveProviderId } from "@/shared/constants/providers.js";
 import { buildMcpProxyTargets } from "@/lib/mcp/proxyTargets.js";
 import { buildMcpToolBridge } from "@/lib/mcp/toolBridge.js";
 
@@ -251,6 +253,15 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   }
 
   const { provider, model } = modelInfo;
+
+  // Block disabled providers before any credential lookup or dispatch.
+  if (isProviderDisabled(provider)) {
+    log.warn("CHAT", `Provider "${provider}" is disabled — blocking request`);
+    return errorResponse(
+      HTTP_STATUS.FORBIDDEN,
+      `Provider "${provider}" is disabled`
+    );
+  }
 
   // Routing shown in the unified "▶" line (client model → provider/model)
 
