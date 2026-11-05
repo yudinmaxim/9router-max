@@ -1,7 +1,7 @@
 import { WebSocketServer } from "ws";
 import { createAcpServer } from "./server.js";
 
-export function attachAcpWebSocket(server, { openChild, modelCatalog, log = () => {}, clientInfo } = {}) {
+export function attachAcpWebSocket(server, { openChild, modelCatalog, modelOptions, extraOptions, log = () => {}, clientInfo } = {}) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 
   server.on("upgrade", (request, socket, head) => {
@@ -17,7 +17,7 @@ export function attachAcpWebSocket(server, { openChild, modelCatalog, log = () =
         if (trace) console.error(`[ACP WS] → ${JSON.stringify(frame)}`);
         if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
       };
-      const acp = createAcpServer({ write, openChild, modelCatalog, log, clientInfo });
+      const acp = createAcpServer({ write, openChild, modelCatalog, modelOptions, extraOptions, log, clientInfo });
       ws.on("message", async (data, isBinary) => {
         if (isBinary) return ws.close(1003, "text frames required");
         let frame;

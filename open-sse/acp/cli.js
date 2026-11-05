@@ -30,7 +30,7 @@ async function main() {
 
   const modelCatalog = () => {
     const models = [];
-    const acpProviders = ["codex-acp", "cursor-acp", "opencode-acp", "omp-acp"];
+    const acpProviders = ["codex-acp", "cursor-acp", "opencode-acp"];
     for (const providerId of acpProviders) {
       const executor = getExecutor(providerId);
       if (executor?.acp) {

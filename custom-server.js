@@ -140,12 +140,17 @@ async function attachAcpWebSocketToServer(server) {
     const { getExecutor } = await import(pathToFileURL(path.join(__dirname, "open-sse", "executors", "index.js")).href);
     const { getProviderCredentials } = await import(pathToFileURL(path.join(__dirname, "src", "sse", "services", "auth.js")).href);
 
-    const acpProviders = ["codex-acp", "cursor-acp", "opencode-acp", "omp-acp"];
+    const acpProviders = ["codex-acp", "cursor-acp", "opencode-acp"];
     const { getModelsByProviderId } = await import(pathToFileURL(path.join(__dirname, "open-sse", "config", "providerModels.js")).href);
+     const { readCachedCatalog } = await import(pathToFileURL(path.join(__dirname, "open-sse", "executors", "lib", "acpCatalog.js")).href);
+     const { getAllAcpAgentSettings } = await import(pathToFileURL(path.join(__dirname, "src", "lib", "acpAgents.js")).href);
+     const { getDisabledModels } = await import(pathToFileURL(path.join(__dirname, "src", "lib", "disabledModelsDb.js")).href);
+     const { getProviderAlias } = await import(pathToFileURL(path.join(__dirname, "src", "shared", "constants", "providers.js")).href);
+    const { isProviderDisabled } = await import(pathToFileURL(path.join(__dirname, "src", "lib", "disabledProviders.js")).href);
     const factories = new Map();
     const resolveProvider = (model) => {
       const value = typeof model === "string" ? model : "";
-      const match = acpProviders.find((id) => value === id || value.startsWith(`${id}/`));
+      const match = acpProviders.find((id) => value === id || value.startsWith(`${id}/`) || value.startsWith(`${id}::`));
       return match || "codex-acp";
     };
     const resolveContext = async ({ providerId: id, model }) => {
@@ -167,24 +172,71 @@ async function attachAcpWebSocketToServer(server) {
         providerId,
         spec: executor.acp,
         resolveContext,
-        log: (level, message) => console.error(`[ACP WebSocket] [${level}] ${message}`),
+       log: (level, message) => console.error(`[ACP WebSocket] [${level}] ${message}`),
       }));
     }
-    const modelCatalog = () => acpProviders.flatMap((provider) => {
-      const models = getModelsByProviderId(provider);
-      return models.length
-        ? models.map(({ id, name }) => ({ modelId: `${provider}/${id}`, name: name || id, provider }))
-        : [{ modelId: provider, name: provider, provider }];
-    });
+    const modelCatalog = async () => {
+      const settings = await getAllAcpAgentSettings();
+      const disabled = await getDisabledModels();
+      return acpProviders.flatMap((provider) => {
+        // A provider the operator turned off must not surface its models to
+        // ACP clients either — the switch is the global on/off, and the
+        // per-agent enabledModels below only narrows a running one.
+        if (isProviderDisabled(provider)) return [];
+        const source = readCachedCatalog(provider)?.models || getModelsByProviderId(provider);
+        const configured = settings[provider]?.enabledModels;
+        const hidden = new Set(disabled[getProviderAlias(provider)] || []);
+        const isHidden = (id) => hidden.has(id) || hidden.has(String(id).split("/").pop());
+        const models = (Array.isArray(configured) ? source.filter((m) => configured.includes(m.id)) : source)
+          .filter((m) => !isHidden(m.id));
+        console.error(`[ACP WS] catalog ${provider}: source=${source.length} configured=${configured?.length ?? "all"} hidden=${hidden.size} output=${models.length}`);
+        return models.map(({ id, name }) => ({ modelId: `${provider}/${id}`, name: settings[provider]?.modelNames?.[id] || name || id, provider }));
+      });
+    };
+    const extraOptions = (childOptions) => {
+      const allowed = new Set(["mode", "collaboration_mode", "thought_level", "reasoning_effort", "effort", "thinking"]);
+      const hiddenValues = new Set(["low", "medium", "med", "high", "max"]);
+      const seen = new Set();
+      const output = [];
+      for (const option of (Array.isArray(childOptions) ? childOptions : [])) {
+        if (!allowed.has(option.id) && !allowed.has(option.category)) continue;
+        const id = option.id || option.category;
+        if (!id || seen.has(id) || !Array.isArray(option.options) || !option.options.length) continue;
+        const options = option.options.filter((item) => !hiddenValues.has(String(typeof item === "string" ? item : item.value).toLowerCase()));
+        if (!options.length) continue;
+        seen.add(id);
+        output.push({
+            id,
+            category: option.category || id,
+            type: option.type || "select",
+            name: option.name || id,
+            ...(option.description ? { description: option.description } : {}),
+            ...(option.currentValue != null ? { currentValue: option.currentValue } : {}),
+          options: options.map((item) => typeof item === "string"
+                ? { value: item, name: item }
+                : { value: item.value, name: item.name || item.value, ...(item.description ? { description: item.description } : {}) }),
+        });
+      }
+      return output;
+    };
 
     attachAcpWebSocket(server, {
       openChild: (opts) => {
         const provider = resolveProvider(opts.model);
         const factory = factories.get(provider);
         if (!factory) throw new Error(`ACP provider unavailable: ${provider}`);
-        return factory.openChild({ ...opts, model: opts.model?.split("/").slice(1).join("/") || "default" });
+        return factory.openChild({ ...opts, model: (opts.model?.includes("::") ? opts.model.split("::").slice(1).join("::") : opts.model?.split("/").slice(1).join("/")) || "default" });
       },
       modelCatalog,
+      modelOptions: (_childOptions, sharedCatalog) => ({
+        id: "model",
+        category: "model",
+        type: "select",
+        name: "Model",
+        currentValue: sharedCatalog[0]?.modelId || "",
+        options: sharedCatalog.map((entry) => ({ value: entry.modelId, name: entry.name || entry.modelId })),
+      }),
+      extraOptions,
       log: (level, message) => console.error(`[ACP WebSocket] [${level}] ${message}`),
       clientInfo: { name: "9router", version: "0.5.99" },
     });

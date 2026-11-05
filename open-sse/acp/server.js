@@ -51,7 +51,7 @@ const INTERNAL_ERROR = -32603;
  * @param {(level: string, msg: string) => void} [deps.log] server-side logging (must go to stderr)
  * @param {object} [deps.clientInfo]            name/version echoed into initialize
  */
-export function createAcpServer({ write, openChild, modelCatalog, log = () => {}, clientInfo = {} }) {
+export function createAcpServer({ write, openChild, modelCatalog, modelOptions, extraOptions: extraOptionsBuilder, log = () => {}, clientInfo = {} }) {
   // zedSessionId → { provider, currentModel, childSessionId, child, transcript, cwd }
   const dialogues = new Map();
   const childRequests = new Map();
@@ -96,12 +96,15 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
 
   async function onInitialize(id, params) {
     clientCapabilities = params?.clientCapabilities || {};
+    const catalog = modelCatalog ? await modelCatalog() : [];
+    log("info", `initialize catalog models=${catalog.length} ids=${catalog.map((entry) => entry.modelId ?? entry.id).join(",")}`);
     reply(id, {
       protocolVersion: PROTOCOL_VERSION,
       agentCapabilities: AGENT_CAPABILITIES,
       authMethods: [],
       ...(clientInfo.name ? { agentInfo: clientInfo } : {}),
-      models: { availableModels: (modelCatalog?.() || []).map(toModelEntry) },
+      models: { availableModels: catalog.map(toModelEntry) },
+      configOptions: [modelOptions ? modelOptions([], catalog) : { id: "model", category: "model", type: "select", name: "Model", currentValue: catalog[0]?.modelId || "", options: catalog.map((entry) => ({ value: entry.modelId ?? entry.id, name: entry.name ?? entry.modelId ?? entry.id })) }],
     });
   }
 
@@ -127,14 +130,27 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
       cwd,
       transcript: createShadowTranscript(),
       promptInFlight: false,
+      configOptions: [],
     });
     await persist(zedSessionId, dialogues.get(zedSessionId));
     log("info", `session/new ${zedSessionId} → child ${child.provider}/${child.sessionId}`);
+    const sharedCatalog = modelCatalog ? await modelCatalog() : child.catalog;
+    // ACP model IDs must use slash-qualified provider/model form for Zed picker compatibility.
+    log("info", `session/new catalog models=${sharedCatalog.length} ids=${sharedCatalog.map((entry) => entry.modelId ?? entry.id).join(",")}`);
+    log("info", `session/new catalog models=${Array.isArray(sharedCatalog) ? sharedCatalog.length : 0}`);
+    const rawModelOptions = modelOptions ? modelOptions(child.configOptions || [], sharedCatalog) : { id: "model", category: "model", type: "select", name: "Model", currentValue: sharedCatalog[0]?.modelId || "", options: sharedCatalog.map((entry) => ({ value: entry.modelId ?? entry.id, name: entry.name ?? entry.modelId ?? entry.id })) };
+    const sharedModelOptions = Array.isArray(rawModelOptions) ? rawModelOptions[0] : rawModelOptions;
+    const extraOptions = extraOptionsBuilder ? extraOptionsBuilder(child.configOptions || [], sharedCatalog, child.provider || dialogue.provider) : [];
+    log("info", `session/new config model options=${sharedModelOptions?.options?.length || 0} extras=${extraOptions.length} ids=${(sharedModelOptions?.options || []).slice(0, 3).map((option) => option.value).join(",")}`);
     reply(id, {
       sessionId: zedSessionId,
-      models: buildModels(child.catalog, child.currentModel),
-      ...(child.configOptions ? { configOptions: child.configOptions } : {}),
+      models: buildModels(sharedCatalog, sharedCatalog[0]?.modelId || sharedCatalog[0]?.id || null),
+      // Do not forward child configOptions: Codex child options contain its
+      // private model list and make Zed render only Codex models.
+      configOptions: [sharedModelOptions, ...extraOptions],
+      _meta: { modelCatalogSource: "9router-shared" },
     });
+    dialogues.get(zedSessionId).configOptions = [sharedModelOptions, ...extraOptions];
   }
 
   async function onSessionPrompt(id, params) {
@@ -157,6 +173,7 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
     let unsubscribePrompt = null;
     const onceResult = new Promise((resolve) => {
       const handler = (msg) => {
+        log("debug", `child message provider=${dialogue.provider} ${JSON.stringify(msg).slice(0, 2000)}`);
         if (msg.method && msg.id !== undefined && msg.id !== null) {
           childRequests.set(msg.id, dialogue);
           const paramsOut = { ...(msg.params || {}), sessionId };
@@ -171,6 +188,7 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
         }
         if (msg.method === "session/update") {
           const update = msg.params?.update || msg.params;
+          log("debug", `child session/update provider=${dialogue.provider} update=${JSON.stringify(update).slice(0, 1000)}`);
           if (update) {
             const output = update._meta?.terminal_output_delta;
             const rawInput = update.rawInput;
@@ -188,7 +206,9 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
             sendNotification("session/update", { sessionId, update: normalized });
           }
         } else if (msg.id === promptResult) {
-          stopReason = msg.result?.stopReason || "stop";
+          stopReason = ["end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"].includes(msg.result?.stopReason)
+            ? msg.result.stopReason
+            : "end_turn";
           unsubscribePrompt?.();
           resolve();
         }
@@ -246,6 +266,36 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
     if (!dialogue) return fail(id, INVALID_PARAMS, "session not found");
     if (!dialogue.child) return fail(id, INTERNAL_ERROR, "child session unavailable");
 
+    if (configId === "model" && typeof value === "string") {
+      const separator = value.includes("::") ? "::" : "/";
+      const provider = separator === "::" ? value.split("::", 1)[0] : value.split("/", 1)[0];
+      const childModel = value.slice(provider.length + separator.length);
+      if (provider && provider !== dialogue.provider) {
+        try {
+          const nextChild = await openChild({ cwd: dialogue.cwd, mcpServers: [], model: value });
+          if (!nextChild?.sessionId) throw new Error(`target ACP provider ${provider} failed to create session`);
+          const previous = dialogue.child;
+          dialogue.child = nextChild;
+          dialogue.provider = nextChild.provider || provider;
+          dialogue.childSessionId = nextChild.sessionId;
+          dialogue.currentModel = childModel;
+          previous?.dispose?.();
+          await persist(sessionId, dialogue);
+          const modelOption = (dialogue.configOptions || []).find((option) => option.id === "model" || option.category === "model");
+          dialogue.configOptions = [
+            { ...(modelOption || { id: "model", category: "model", type: "select", name: "Model", options: [] }), currentValue: value },
+            ...(dialogue.configOptions || []).filter((option) => option !== modelOption),
+          ];
+          return reply(id, { configOptions: dialogue.configOptions });
+        } catch (error) {
+          return fail(id, INTERNAL_ERROR, `failed to switch ACP provider: ${error?.message || error}`);
+        }
+      }
+    }
+
+    const childValue = configId === "model" && typeof value === "string"
+      ? (value.includes("::") ? value.split("::").slice(1).join("::") : value.includes("/") ? value.split("/").slice(1).join("/") : value)
+      : value;
     let responseId = null;
     const result = new Promise((resolve) => {
       dialogue.child.onMessage((msg) => {
@@ -255,16 +305,22 @@ export function createAcpServer({ write, openChild, modelCatalog, log = () => {}
     responseId = dialogue.child.sendRpc("session/set_config_option", {
       sessionId: dialogue.childSessionId,
       configId,
-      value,
+      value: childValue,
     });
     if (!responseId) return fail(id, INTERNAL_ERROR, "failed to send config option to child");
     const response = await result;
-    if (response.error) return fail(id, response.error.code || INTERNAL_ERROR, response.error.message || "child rejected config option");
+    if (response.error) {
+      log("error", `set_config_option rejected provider=${dialogue.provider} configId=${configId} value=${String(value)} error=${response.error.message || "unknown"}`);
+      return fail(id, response.error.code || INTERNAL_ERROR, response.error.message || "child rejected config option");
+    }
     if (configId === "model") {
-      dialogue.currentModel = value;
+      dialogue.currentModel = childValue;
+      dialogue.configOptions = (dialogue.configOptions || []).map((option) => option.id === "model" || option.category === "model"
+        ? { ...option, currentValue: value }
+        : option);
       persist(sessionId, dialogue).catch((err) => log("error", `dialogue persistence failed: ${err?.message || err}`));
     }
-    reply(id, response.result || {});
+    reply(id, { ...(response.result || {}), configOptions: dialogue.configOptions || [] });
   }
 
   async function onSessionCancel(id, params) {

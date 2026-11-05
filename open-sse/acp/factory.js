@@ -52,6 +52,9 @@ export function createChildFactory({ providerId, spec, resolveContext = async ()
     });
     const env = { ...resolvedEnv };
     if (env.NODE_OPTIONS?.includes("alias-loader.mjs")) delete env.NODE_OPTIONS;
+    // Preserve OpenCode session variables. Resume/load needs them to reconnect
+    // to an existing agent session; fresh-session isolation belongs in spawn
+    // context, not global environment mutation.
 
     const spawnArgs = args || ["acp"];
     const { cmd, shell } = agentSpawnCommand(bin, spawnArgs);
@@ -114,6 +117,23 @@ export function createChildFactory({ providerId, spec, resolveContext = async ()
     await onceSessionNew;
 
     const sessionId = sessionResult?.sessionId || "";
+    if (model && model !== "default") {
+      const modelId = model;
+      const modelOption = (sessionResult?.configOptions || []).find((option) => option.id === "model" || option.category === "model");
+      const supported = (modelOption?.options || []).some((option) => (typeof option === "string" ? option : option.value) === modelId);
+      if (supported) {
+        const setModelId = core.sendRpc("session/set_config_option", { sessionId, configId: "model", value: modelId });
+        await new Promise((resolve, reject) => {
+          const onMessage = (msg) => {
+            if (msg.id !== setModelId) return;
+            if (msg.error) reject(new Error(msg.error.message || "child model selection failed"));
+            else resolve();
+          };
+          core.onMessage(onMessage);
+        });
+        currentModel = modelId;
+      }
+    }
 
     return {
       provider,
