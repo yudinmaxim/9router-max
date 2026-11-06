@@ -98,10 +98,10 @@ RUN mkdir -p /app/data && chown -R node:node /app && \
 # reproducible and is unrelated to installing the runtime entrypoint helper.
 # codex/CLI-агенты ходят через native-tls и зависят от системных CA-корней.
 RUN if command -v apk >/dev/null; then \
-      apk add --no-cache su-exec ca-certificates; \
+      apk add --no-cache su-exec ca-certificates python3 py3-pip git; \
       printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexec su-exec node "$@"\n' > /entrypoint.sh; \
     else \
-      apt-get update && apt-get install -y --no-install-recommends gosu ca-certificates && rm -rf /var/lib/apt/lists/*; \
+      apt-get update && apt-get install -y --no-install-recommends gosu ca-certificates python3 python3-pip python3-venv git && rm -rf /var/lib/apt/lists/*; \
       printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexec gosu node "$@"\n' > /entrypoint.sh; \
     fi && chmod +x /entrypoint.sh
 
