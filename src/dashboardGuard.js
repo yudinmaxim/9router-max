@@ -110,9 +110,57 @@ function isLoopbackHostname(h) {
   return LOOPBACK_HOSTS.has(name);
 }
 
+// Docker publishes container ports through a bridge network, so a browser on the
+// host reaches the service with the bridge gateway as its TCP peer — never
+// 127.0.0.1 — and local-only routes would 403 for the operator. Listing those
+// gateways in NINEROUTER_TRUSTED_PEERS (comma-separated IPv4/CIDR) treats them
+// as local equivalents. This is not a spoofing hole: x-9r-real-ip is only read
+// when the wrapper stamped its peer token, so the address is the unspoofable
+// socket peer, and remote callers still fail the check by IP.
+function ipv4ToNum(ip) {
+  const parts = String(ip).trim().split(".");
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const octet = parseInt(part, 10);
+    if (octet > 255) return null;
+    n = (n << 8) | octet;
+  }
+  return n >>> 0;
+}
+
+let trustedPeersCache = { raw: null, entries: [] };
+function trustedPeerEntries() {
+  const raw = process.env.NINEROUTER_TRUSTED_PEERS || "";
+  if (trustedPeersCache.raw !== raw) {
+    const entries = raw.split(",").map((e) => e.trim()).filter(Boolean).flatMap((entry) => {
+      const [addr, bits] = entry.split("/");
+      const base = ipv4ToNum(addr);
+      if (base === null) return [];
+      const prefix = bits === undefined ? 32 : parseInt(bits, 10);
+      if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return [];
+      const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+      return [{ base: (base & mask) >>> 0, mask }];
+    });
+    trustedPeersCache = { raw, entries };
+  }
+  return trustedPeersCache.entries;
+}
+
+function isTrustedPeerAddress(ip) {
+  if (!ip) return false;
+  let name = String(ip).trim().toLowerCase();
+  if (name.startsWith("::ffff:")) name = name.slice(7);
+  const num = ipv4ToNum(name);
+  if (num === null) return false;
+  return trustedPeerEntries().some(({ base, mask }) => ((num & mask) >>> 0) === base);
+}
+
 function isLoopbackPeer(request) {
   if (hasTrustedPeerHeaders(request)) {
-    return isLoopbackHostname(request.headers.get("x-9r-real-ip"));
+    const peerIp = request.headers.get("x-9r-real-ip");
+    return isLoopbackHostname(peerIp) || isTrustedPeerAddress(peerIp);
   }
   // Bare `next dev` forks its server, so the wrapper never loads and no peer address
   // reaches us. Host is spoofable, so this stays confined to development.
