@@ -101,9 +101,18 @@ RUN if command -v apk >/dev/null; then \
       apk add --no-cache su-exec ca-certificates python3 py3-pip git; \
       printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexec su-exec node "$@"\n' > /entrypoint.sh; \
     else \
-      apt-get update && apt-get install -y --no-install-recommends gosu ca-certificates python3 python3-pip python3-venv git && rm -rf /var/lib/apt/lists/*; \
+      apt-get update && apt-get install -y --no-install-recommends gosu ca-certificates python3 python3-pip python3-venv git bubblewrap ripgrep php-cli php-mbstring php-xml php-curl php-zip php-mysql php-pgsql php-sqlite3 php-bcmath php-intl php-gd composer unzip && rm -rf /var/lib/apt/lists/*; \
       printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexec gosu node "$@"\n' > /entrypoint.sh; \
     fi && chmod +x /entrypoint.sh
+
+# Global CLI analyzers for agent tool-use: vue-tsc/tsc (types), eslint, prettier.
+# A dedicated prefix keeps npm -g off the read-only nvm mount from the host;
+# symlinks into /usr/local/bin keep them on PATH regardless of NPM_CONFIG_PREFIX
+# at runtime (compose points it at /app/data/npm-global so agent-run installs
+# land in the volume and survive rebuilds).
+ENV NPM_CONFIG_PREFIX=/opt/npm-global
+RUN npm install -g typescript @vue/language-server eslint prettier vue-tsc &&     ln -s /opt/npm-global/bin/* /usr/local/bin/
+
 
 EXPOSE 20128
 
