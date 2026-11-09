@@ -58,7 +58,13 @@ function pushHistory(dialogue, entry) {
   if (!dialogue.history) dialogue.history = [];
   dialogue.history.push(entry);
   if (dialogue.history.length > HISTORY_MAX_ENTRIES) {
-    dialogue.history.splice(0, dialogue.history.length - HISTORY_MAX_ENTRIES);
+    // awareness is an index into history — shift it with the splice so a
+    // trimmed head does not silently re-deliver or skip entries.
+    const removed = dialogue.history.length - HISTORY_MAX_ENTRIES;
+    dialogue.history.splice(0, removed);
+    for (const childEntry of dialogue.children?.values() || []) {
+      if (childEntry.awareness != null) childEntry.awareness = Math.max(0, childEntry.awareness - removed);
+    }
   }
 }
 
@@ -86,18 +92,13 @@ function buildHistoryText(entries, intro, outro) {
   return [intro, ...lines, outro].join("\n");
 }
 
-function buildReplayText(history) {
-  return buildHistoryText(
-    history,
-    "[Context restore] This dialogue continues an earlier conversation. The transcript below is history for context only — do not answer it, just remember it. Reply with exactly: OK",
-    "[End of history]",
-  );
-}
-
-function buildDeltaText(entries) {
+// Context the child has not seen is merged into the next real prompt as a
+// prefix — one model turn instead of a separate injection turn. The intro
+// must make clear the transcript is background, not the request itself.
+function buildContextPrefix(entries) {
   return buildHistoryText(
     entries,
-    "[Context update] While you were inactive, the conversation continued. The transcript below is history for context only — do not answer it, just remember it. Reply with exactly: OK",
+    "[Context update] This dialogue continues an earlier conversation you were not part of. The transcript below is history for context only — do not answer it. The user's actual request follows after [End of update].",
     "[End of update]",
   );
 }
@@ -218,84 +219,11 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     return out;
   }
 
-  // Send one synthetic session/prompt carrying reconstructed history and
-  // wait for the child to finish it. Fail-open: a failed injection must not
-  // block the real prompt — the child simply stays colder.
-  async function sendHistoryPrompt(dialogue, text) {
-    if (!text || !dialogue.child?.sendRpc) return false;
-    try {
-      const responseId = dialogue.child.sendRpc("session/prompt", {
-        sessionId: dialogue.childSessionId,
-        prompt: [{ type: "text", text }],
-      });
-      if (!responseId) return false;
-      await new Promise((resolve) => {
-        const off = dialogue.child.onMessage((msg) => {
-          // Agent→client requests during injection (permissions, fs, …) must
-          // be answered or the child hangs mid-prompt. Permissions are
-          // cancelled — the injection is context-only, tools are not needed.
-          if (msg.method && msg.id !== undefined && msg.id !== null) {
-            const result = msg.method === "session/request_permission"
-              ? { outcome: { outcome: "cancelled" } }
-              : null;
-            dialogue.child.sendRpcRaw?.(result
-              ? { jsonrpc: "2.0", id: msg.id, result }
-              : { jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "not supported during history injection" } });
-            return;
-          }
-          if (msg.id !== responseId) return;
-          off?.();
-          resolve(msg);
-        });
-      });
-      return true;
-    } catch (err) {
-      log("warn", `history injection into ${dialogue.provider} failed: ${err?.message || err}`);
-      return false;
-    }
-  }
-
-  // Full-history replay for a child that opened completely fresh.
-  async function replayHistoryIntoChild(dialogue) {
-    const ok = await sendHistoryPrompt(dialogue, buildReplayText(dialogue.history));
-    if (ok) log("info", `replayed ${dialogue.history?.length || 0} history entries into fresh child ${dialogue.provider}`);
-    return ok;
-  }
-
-  // Deliver only the history tail a (re)activated child has not seen yet —
-  // the delta accumulated while another provider owned the dialogue.
-  async function deliverHistoryDelta(dialogue, seen) {
-    const history = dialogue.history || [];
-    const from = Math.max(0, Math.min(Number(seen) || 0, history.length));
-    if (from >= history.length) return true;
-    const ok = await sendHistoryPrompt(dialogue, buildDeltaText(history.slice(from)));
-    if (ok) log("info", `delivered ${history.length - from} history delta entries into ${dialogue.provider}`);
-    return ok;
-  }
-
-  // Bring a reused/parked or natively-resumed child up to date with the
-  // unified dialogue history, then mark how much it has seen.
-  async function syncChildAwareness(dialogue, entry) {
-    const ok = await deliverHistoryDelta(dialogue, entry?.awareness ?? 0);
-    if (ok && entry) entry.awareness = dialogue.history?.length || 0;
-    return ok;
-  }
-
-  // Context sync is deferred off the set_config_option reply path: Zed
-  // blocks its model picker on that response and a delta injection is a
-  // full model turn. The pending sync runs lazily before the next prompt.
-  // The guard skips delivery if the child was swapped again meanwhile —
-  // its awareness stays stale and the delta is retried on reactivation.
-  function deferChildSync(dialogue, child, sync) {
-    dialogue.contextSync = () => (dialogue.child === child ? sync() : true);
-  }
-
-  async function flushChildSync(dialogue) {
-    const sync = dialogue.contextSync;
-    if (!sync) return;
-    dialogue.contextSync = null;
-    await sync();
-  }
+  // History a child has not seen is never injected as a separate turn —
+  // onSessionPrompt merges it into the real prompt as a context prefix, so
+  // a provider switch costs zero extra model turns. `awareness` on each
+  // children-map entry is the index into dialogue.history up to which the
+  // child has seen entries (natively while active, or via a merged prefix).
 
   // Re-point a reused child at the dialogue's current model. Fail-open: a
   // rejected model must not abort the switch — the child keeps its old model.
@@ -333,14 +261,12 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
   async function ensureActiveChild(dialogue) {
     if (dialogue.child) return;
     if (!dialogue.provider) throw new Error("dialogue has no provider");
-    const pending = dialogue.transcript.getAll().length;
     const cached = pickChild(dialogue, dialogue.provider);
     if (cached) {
       dialogue.child = cached.child;
       dialogue.childSessionId = cached.childSessionId;
       dialogue.currentModel = cached.currentModel;
       log("info", `re-attached child from provider cache: ${dialogue.provider}/${dialogue.childSessionId}`);
-      await syncChildAwareness(dialogue, cached);
       return;
     }
     const model = dialogue.currentModel ? `${dialogue.provider}/${dialogue.currentModel}` : "default";
@@ -361,18 +287,14 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
       childSessionId: dialogue.childSessionId,
       currentModel: dialogue.currentModel,
     });
-    if (child.resumed) {
-      // Native resume restored the child's own past, but not the turns other
-      // providers exchanged meanwhile — deliver just that delta.
-      const seen = Number(dialogue.childSessions?.[dialogue.provider]?.awareness) || 0;
-      const ok = await deliverHistoryDelta(dialogue, seen);
-      if (!ok) {
-        const entry = dialogue.children?.get(dialogue.provider);
-        if (entry) entry.awareness = seen;
-      }
-    } else if (pending > 0) {
-      const replayed = await replayHistoryIntoChild(dialogue);
-      if (!replayed) log("warn", `child ${dialogue.provider} opened fresh after restore; ${pending} transcript entries not replayed`);
+    // Seed awareness: a natively-resumed child has seen its persisted
+    // watermark, a fresh child has seen nothing. Whatever history tail is
+    // missing is merged into the next real prompt by onSessionPrompt.
+    const entry = dialogue.children?.get(dialogue.provider);
+    if (entry) {
+      entry.awareness = child.resumed
+        ? Number(dialogue.childSessions?.[dialogue.provider]?.awareness) || 0
+        : 0;
     }
   }
 
@@ -463,9 +385,26 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
 
     try {
       await ensureActiveChild(dialogue);
-      await flushChildSync(dialogue);
     } catch (err) {
       return fail(id, INTERNAL_ERROR, `failed to (re)open child session: ${err?.message || err}`);
+    }
+
+    // Merge the history tail this child has not seen into the prompt itself
+    // as a context prefix — a provider switch then costs zero extra model
+    // turns, and Zed's model picker never waits on context delivery.
+    const activeEntry = dialogue.children?.get(dialogue.provider);
+    const history = dialogue.history || [];
+    const seen = activeEntry
+      ? Math.max(0, Math.min(Number(activeEntry.awareness) || 0, history.length))
+      : history.length;
+    const missed = history.slice(seen);
+    let effectivePrompt = prompt;
+    if (missed.length) {
+      const prefix = buildContextPrefix(missed);
+      if (prefix) {
+        effectivePrompt = [{ type: "text", text: `${prefix}\n\n` }, ...prompt];
+        log("info", `merged ${missed.length} history entries into prompt for ${dialogue.provider}`);
+      }
     }
 
     const { child, childSessionId, transcript } = dialogue;
@@ -528,7 +467,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
       unsubscribePrompt = child.onMessage(handler);
     });
 
-    promptResult = child.sendRpc("session/prompt", { sessionId: childSessionId, prompt });
+    promptResult = child.sendRpc("session/prompt", { sessionId: childSessionId, prompt: effectivePrompt });
 
     if (!promptResult) {
       unsubscribePrompt?.();
@@ -540,6 +479,9 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
       await onceResult;
       const assistantReply = assistantText.trim();
       if (assistantReply) pushHistory(dialogue, { role: "assistant", text: assistantReply.slice(0, ASSISTANT_ENTRY_MAX_CHARS) });
+      // The child saw the merged prefix plus this whole exchange natively —
+      // mark its awareness so the next activation only sends what is new.
+      if (activeEntry && stopReason !== "cancelled") activeEntry.awareness = dialogue.history.length;
       persist(sessionId, dialogue).catch((err) => log("error", `dialogue persistence failed: ${err?.message || err}`));
       reply(id, { stopReason });
     } finally {
@@ -609,7 +551,6 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
             dialogue.childSessionId = cached.childSessionId;
             dialogue.provider = provider;
             dialogue.currentModel = cached.currentModel;
-            deferChildSync(dialogue, cached.child, () => syncChildAwareness(dialogue, cached));
             log("info", `switch reuses live child ${provider}/${dialogue.childSessionId} (context preserved)`);
           } else {
             const resumeSessionId = dialogue.childSessions?.[provider]?.childSessionId || null;
@@ -626,24 +567,12 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
               currentModel: childModel,
             });
             const entry = dialogue.children.get(dialogue.provider);
-            if (nextChild.resumed) {
-              // Native resume restored the child's own past; the persisted
-              // awareness marks how much of the unified history it has seen.
-              const seen = Number(dialogue.childSessions?.[dialogue.provider]?.awareness) || 0;
-              if (entry) entry.awareness = seen;
-              deferChildSync(dialogue, nextChild, () => syncChildAwareness(dialogue, entry));
-            } else {
-              if (entry) entry.awareness = 0;
-              const pending = dialogue.transcript.getAll().length;
-              deferChildSync(dialogue, nextChild, async () => {
-                const ok = await replayHistoryIntoChild(dialogue);
-                if (ok) {
-                  if (entry) entry.awareness = dialogue.history?.length || 0;
-                } else if (pending > 0) {
-                  log("warn", `child ${dialogue.provider} opened fresh on switch; ${pending} transcript entries not replayed`);
-                }
-                return ok;
-              });
+            // Seed awareness for the merged-prefix path: a natively-resumed
+            // child has seen its persisted watermark, a fresh child nothing.
+            if (entry) {
+              entry.awareness = nextChild.resumed
+                ? Number(dialogue.childSessions?.[dialogue.provider]?.awareness) || 0
+                : 0;
             }
           }
           evictChildren(dialogue, dialogue.provider);
