@@ -46,6 +46,50 @@ const INTERNAL_ERROR = -32603;
 // "restore" when the dialogue hops back to it (M4 provider switching).
 const MAX_CACHED_CHILDREN = 3;
 
+// Cross-provider context replay (M4): a freshly opened child starts with an
+// empty agent context, so the dialogue's user/assistant turns are injected
+// as one synthetic prompt. Bounds keep the replay affordable on long chats.
+const HISTORY_MAX_ENTRIES = 200;
+const REPLAY_MAX_ENTRIES = 40;
+const REPLAY_MAX_CHARS = 24000;
+const ASSISTANT_ENTRY_MAX_CHARS = 8000;
+
+function pushHistory(dialogue, entry) {
+  if (!dialogue.history) dialogue.history = [];
+  dialogue.history.push(entry);
+  if (dialogue.history.length > HISTORY_MAX_ENTRIES) {
+    dialogue.history.splice(0, dialogue.history.length - HISTORY_MAX_ENTRIES);
+  }
+}
+
+function extractPromptText(prompt) {
+  if (!Array.isArray(prompt)) return "";
+  return prompt
+    .map((block) => (block?.type === "text" && typeof block.text === "string" ? block.text : ""))
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function buildReplayText(history) {
+  const entries = (history || []).slice(-REPLAY_MAX_ENTRIES);
+  const lines = [];
+  let used = 0;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    const line = `${entry.role === "user" ? "User" : "Assistant"}: ${entry.text}`;
+    if (used + line.length > REPLAY_MAX_CHARS) break;
+    lines.unshift(line);
+    used += line.length;
+  }
+  if (!lines.length) return "";
+  return [
+    "[Context restore] This dialogue continues an earlier conversation. The transcript below is history for context only — do not answer it, just remember it.",
+    ...lines,
+    "[End of history]",
+  ].join("\n");
+}
+
 /**
  * @param {object} deps
  * @param {(frame: object) => void} deps.write            emit one outbound JSON-RPC frame (object, not a line)
@@ -71,6 +115,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
       currentModel: dialogue.currentModel,
       transcript: dialogue.transcript.getAll(),
       childSessions: dialogue.childSessions,
+      history: dialogue.history || [],
     });
   }
 
@@ -156,6 +201,33 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     return out;
   }
 
+  // Inject the dialogue history into a freshly opened child so a provider
+  // switch does not lose the conversation. Fail-open: a failed replay must
+  // not block the real prompt — the child simply starts colder.
+  async function replayHistoryIntoChild(dialogue) {
+    const text = buildReplayText(dialogue.history);
+    if (!text || !dialogue.child?.sendRpc) return false;
+    try {
+      const responseId = dialogue.child.sendRpc("session/prompt", {
+        sessionId: dialogue.childSessionId,
+        prompt: [{ type: "text", text }],
+      });
+      if (!responseId) return false;
+      await new Promise((resolve) => {
+        const off = dialogue.child.onMessage((msg) => {
+          if (msg.id !== responseId) return;
+          off?.();
+          resolve(msg);
+        });
+      });
+      log("info", `replayed ${dialogue.history.length} history entries into fresh child ${dialogue.provider}`);
+      return true;
+    } catch (err) {
+      log("warn", `history replay into ${dialogue.provider} failed: ${err?.message || err}`);
+      return false;
+    }
+  }
+
   // Re-point a reused child at the dialogue's current model. Fail-open: a
   // rejected model must not abort the switch — the child keeps its old model.
   async function pinChildModel(entry, childModel) {
@@ -220,7 +292,8 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
       currentModel: dialogue.currentModel,
     });
     if (pending > 0 && !child.resumed) {
-      log("warn", `child ${dialogue.provider} opened fresh after restore; ${pending} transcript entries not replayed into it (M4 replay pending)`);
+      const replayed = await replayHistoryIntoChild(dialogue);
+      if (!replayed) log("warn", `child ${dialogue.provider} opened fresh after restore; ${pending} transcript entries not replayed`);
     }
   }
 
@@ -277,6 +350,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
       configOptions: [],
       children: new Map(),
       childSessions: {},
+      history: [],
     });
     await persist(zedSessionId, dialogues.get(zedSessionId));
     log("info", `session/new ${zedSessionId} → child ${child.provider}/${child.sessionId}`);
@@ -317,6 +391,9 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     const { child, childSessionId, transcript } = dialogue;
     if (dialogue.promptInFlight) return fail(id, INVALID_PARAMS, "session/prompt already in progress");
     dialogue.promptInFlight = true;
+    const userText = extractPromptText(prompt);
+    if (userText) pushHistory(dialogue, { role: "user", text: userText.slice(0, ASSISTANT_ENTRY_MAX_CHARS) });
+    let assistantText = "";
     const accountingModel = dialogue.currentModel || dialogue.provider || "default";
     trackPendingRequest(accountingModel, dialogue.provider, dialogue.connectionId, true);
     let promptResult = null;
@@ -342,6 +419,9 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
           const update = msg.params?.update || msg.params;
           log("debug", `child session/update provider=${dialogue.provider} update=${JSON.stringify(update).slice(0, 1000)}`);
           if (update) {
+            if (update.sessionUpdate === "agent_message_chunk" && typeof update.content?.text === "string") {
+              assistantText += update.content.text;
+            }
             const output = update._meta?.terminal_output_delta;
             const rawInput = update.rawInput;
             const rawContent = rawInput
@@ -378,6 +458,9 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
 
     try {
       await onceResult;
+      const assistantReply = assistantText.trim();
+      if (assistantReply) pushHistory(dialogue, { role: "assistant", text: assistantReply.slice(0, ASSISTANT_ENTRY_MAX_CHARS) });
+      persist(sessionId, dialogue).catch((err) => log("error", `dialogue persistence failed: ${err?.message || err}`));
       reply(id, { stopReason });
     } finally {
       const status = stopReason === "end_turn" ? "200 OK" : "FAILED 502";
@@ -463,7 +546,8 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
             });
             const pending = dialogue.transcript.getAll().length;
             if (pending > 0 && !nextChild.resumed) {
-              log("warn", `child ${dialogue.provider} opened fresh on switch; ${pending} transcript entries not replayed into it (M4 replay pending)`);
+              const replayed = await replayHistoryIntoChild(dialogue);
+              if (!replayed) log("warn", `child ${dialogue.provider} opened fresh on switch; ${pending} transcript entries not replayed`);
             }
           }
           evictChildren(dialogue, dialogue.provider);
