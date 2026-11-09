@@ -281,6 +281,22 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     return ok;
   }
 
+  // Context sync is deferred off the set_config_option reply path: Zed
+  // blocks its model picker on that response and a delta injection is a
+  // full model turn. The pending sync runs lazily before the next prompt.
+  // The guard skips delivery if the child was swapped again meanwhile —
+  // its awareness stays stale and the delta is retried on reactivation.
+  function deferChildSync(dialogue, child, sync) {
+    dialogue.contextSync = () => (dialogue.child === child ? sync() : true);
+  }
+
+  async function flushChildSync(dialogue) {
+    const sync = dialogue.contextSync;
+    if (!sync) return;
+    dialogue.contextSync = null;
+    await sync();
+  }
+
   // Re-point a reused child at the dialogue's current model. Fail-open: a
   // rejected model must not abort the switch — the child keeps its old model.
   async function pinChildModel(entry, childModel) {
@@ -447,6 +463,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
 
     try {
       await ensureActiveChild(dialogue);
+      await flushChildSync(dialogue);
     } catch (err) {
       return fail(id, INTERNAL_ERROR, `failed to (re)open child session: ${err?.message || err}`);
     }
@@ -592,7 +609,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
             dialogue.childSessionId = cached.childSessionId;
             dialogue.provider = provider;
             dialogue.currentModel = cached.currentModel;
-            await syncChildAwareness(dialogue, cached);
+            deferChildSync(dialogue, cached.child, () => syncChildAwareness(dialogue, cached));
             log("info", `switch reuses live child ${provider}/${dialogue.childSessionId} (context preserved)`);
           } else {
             const resumeSessionId = dialogue.childSessions?.[provider]?.childSessionId || null;
@@ -608,19 +625,25 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
               childSessionId: nextChild.sessionId,
               currentModel: childModel,
             });
+            const entry = dialogue.children.get(dialogue.provider);
             if (nextChild.resumed) {
+              // Native resume restored the child's own past; the persisted
+              // awareness marks how much of the unified history it has seen.
               const seen = Number(dialogue.childSessions?.[dialogue.provider]?.awareness) || 0;
-              const ok = await deliverHistoryDelta(dialogue, seen);
-              if (!ok) {
-                const entry = dialogue.children?.get(dialogue.provider);
-                if (entry) entry.awareness = seen;
-              }
+              if (entry) entry.awareness = seen;
+              deferChildSync(dialogue, nextChild, () => syncChildAwareness(dialogue, entry));
             } else {
+              if (entry) entry.awareness = 0;
               const pending = dialogue.transcript.getAll().length;
-              if (pending > 0) {
-                const replayed = await replayHistoryIntoChild(dialogue);
-                if (!replayed) log("warn", `child ${dialogue.provider} opened fresh on switch; ${pending} transcript entries not replayed`);
-              }
+              deferChildSync(dialogue, nextChild, async () => {
+                const ok = await replayHistoryIntoChild(dialogue);
+                if (ok) {
+                  if (entry) entry.awareness = dialogue.history?.length || 0;
+                } else if (pending > 0) {
+                  log("warn", `child ${dialogue.provider} opened fresh on switch; ${pending} transcript entries not replayed`);
+                }
+                return ok;
+              });
             }
           }
           evictChildren(dialogue, dialogue.provider);
