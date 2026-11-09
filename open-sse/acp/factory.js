@@ -33,9 +33,13 @@ export function createChildFactory({ providerId, spec, resolveContext = async ()
    * @param {object} opts
    * @param {string} opts.cwd          workspace directory
    * @param {Array} opts.mcpServers    MCP servers to register (empty array for now)
+   * @param {string} [opts.resumeSessionId]  child session id to resume via session/load
+   *        instead of opening a fresh session/new. Agents that support loadSession
+   *        (codex-acp does) restore full context; unsupported/failed loads fall
+   *        back to session/new transparently.
    * @returns {Promise<ChildHandle>}
    */
-  async function openChild({ cwd, mcpServers, model = "default" }) {
+  async function openChild({ cwd, mcpServers, model = "default", resumeSessionId = null }) {
     const { context = {}, proxyOptions = null } = await resolveContext({ providerId, model, cwd });
     log("info", `ACP context resolved: ${JSON.stringify({ providerId, model, proxyEnabled: proxyOptions?.connectionProxyEnabled === true })}`);
     const { exe, args, envVar, versionsDir, extraDirs, adapter } = spec;
@@ -108,13 +112,40 @@ export function createChildFactory({ providerId, spec, resolveContext = async ()
 
     if (!initializeId) throw new Error("failed to send initialize request");
     await onceInitialized;
-    sessionNewId = core.sendRpc("session/new", { cwd, mcpServers });
 
-    if (!sessionNewId) {
-      throw new Error("failed to send session/new request");
+    let resumed = false;
+    if (resumeSessionId) {
+      const loadId = core.sendRpc("session/load", { sessionId: resumeSessionId, cwd, mcpServers });
+      if (loadId) {
+        const loadResponse = await new Promise((resolve) => {
+          const onMessage = (msg) => {
+            if (msg.id !== loadId) return;
+            resolve(msg);
+          };
+          core.onMessage(onMessage);
+        });
+        if (!loadResponse?.error) {
+          sessionResult = loadResponse.result || {};
+          if (!sessionResult.sessionId) sessionResult.sessionId = resumeSessionId;
+          catalog = collectModelCatalog(sessionResult);
+          currentModel = currentAgentModel(sessionResult);
+          resumed = true;
+          log("info", `resumed child session ${resumeSessionId} via session/load`);
+        } else {
+          log("warn", `session/load ${resumeSessionId} failed (${loadResponse.error.message || "unknown"}); falling back to session/new`);
+        }
+      }
     }
 
-    await onceSessionNew;
+    if (!sessionResult) {
+      sessionNewId = core.sendRpc("session/new", { cwd, mcpServers });
+
+      if (!sessionNewId) {
+        throw new Error("failed to send session/new request");
+      }
+
+      await onceSessionNew;
+    }
 
     const sessionId = sessionResult?.sessionId || "";
     if (model && model !== "default") {
@@ -139,6 +170,7 @@ export function createChildFactory({ providerId, spec, resolveContext = async ()
       provider,
       connectionId: context.connectionId || null,
       sessionId,
+      resumed,
       catalog,
       currentModel,
       configOptions: sessionResult?.configOptions,

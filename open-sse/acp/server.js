@@ -40,6 +40,12 @@ const METHOD_NOT_FOUND = -32601;
 const INVALID_PARAMS = -32602;
 const INTERNAL_ERROR = -32603;
 
+// How many parked provider children one dialogue may keep in the provider
+// cache before the oldest (excluding the active one) is disposed. Each parked
+// child keeps its live agent context, which is the cheapest and most faithful
+// "restore" when the dialogue hops back to it (M4 provider switching).
+const MAX_CACHED_CHILDREN = 3;
+
 /**
  * @param {object} deps
  * @param {(frame: object) => void} deps.write            emit one outbound JSON-RPC frame (object, not a line)
@@ -57,12 +63,14 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
   const childRequests = new Map();
 
   async function persist(sessionId, dialogue) {
+    dialogue.childSessions = collectChildSessions(dialogue);
     await upsertAcpDialogue({
       id: sessionId,
       cwd: dialogue.cwd,
       provider: dialogue.provider,
       currentModel: dialogue.currentModel,
       transcript: dialogue.transcript.getAll(),
+      childSessions: dialogue.childSessions,
     });
   }
 
@@ -79,6 +87,142 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
   const reply = (id, result) => send({ jsonrpc: "2.0", id, result });
   const fail = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, message } });
   const respondToChild = (dialogue, id, result) => dialogue.child?.sendRpcRaw?.({ jsonrpc: "2.0", id, result });
+
+  // ─── Per-provider child cache (M4 provider switching) ─────────────
+  //
+  // A provider switch used to dispose the outgoing child, killing its live
+  // agent context outright. Instead each dialogue keeps a small provider →
+  // child cache: the outgoing child is parked there and reused when the
+  // dialogue hops back, so no context is lost in either direction.
+
+  // Park a child under its provider key. Replaces any parked child of the
+  // same provider that is not this very child (should not happen, but a
+  // duplicate must not leak).
+  function cacheChild(dialogue, entry) {
+    if (!dialogue.children) dialogue.children = new Map();
+    if (!entry?.provider || !entry.child) return;
+    const previous = dialogue.children.get(entry.provider);
+    if (previous?.child && previous.child !== entry.child) {
+      try { previous.child.dispose?.(); } catch { /* already dead */ }
+    }
+    dialogue.children.set(entry.provider, { ...entry, lastUsedAt: Date.now() });
+  }
+
+  // Look up a live parked child for a provider and mark it recently used.
+  function pickChild(dialogue, provider) {
+    const entry = dialogue.children?.get(provider);
+    if (!entry?.child) return null;
+    entry.lastUsedAt = Date.now();
+    return entry;
+  }
+
+  // Dispose parked children beyond the cap, oldest first, never the active one.
+  function evictChildren(dialogue, activeProvider) {
+    const map = dialogue.children;
+    if (!map || map.size <= MAX_CACHED_CHILDREN) return;
+    const overflow = map.size - MAX_CACHED_CHILDREN;
+    const candidates = [...map.entries()]
+      .filter(([id]) => id !== activeProvider)
+      .sort((a, b) => (a[1].lastUsedAt || 0) - (b[1].lastUsedAt || 0));
+    for (let i = 0; i < Math.min(overflow, candidates.length); i++) {
+      const [id, entry] = candidates[i];
+      try { entry.child?.dispose?.(); } catch { /* already dead */ }
+      map.delete(id);
+      log("info", `evicted parked child ${id}`);
+    }
+  }
+
+  // Serializable snapshot of live/parked child sessions, persisted with the
+  // dialogue so a future resume pass (M5) can reconnect to them by id.
+  function collectChildSessions(dialogue) {
+    const out = {};
+    if (dialogue.child && dialogue.provider) {
+      out[dialogue.provider] = {
+        childSessionId: dialogue.childSessionId,
+        currentModel: dialogue.currentModel,
+        active: true,
+        lastUsedAt: new Date().toISOString(),
+      };
+    }
+    for (const [id, entry] of dialogue.children || []) {
+      if (!entry.child || out[id]) continue;
+      out[id] = {
+        childSessionId: entry.childSessionId,
+        currentModel: entry.currentModel,
+        active: false,
+        lastUsedAt: new Date(entry.lastUsedAt || 0).toISOString(),
+      };
+    }
+    return out;
+  }
+
+  // Re-point a reused child at the dialogue's current model. Fail-open: a
+  // rejected model must not abort the switch — the child keeps its old model.
+  async function pinChildModel(entry, childModel) {
+    if (!entry.child || !childModel || childModel === entry.currentModel) return false;
+    try {
+      const responseId = entry.child.sendRpc("session/set_config_option", {
+        sessionId: entry.childSessionId,
+        configId: "model",
+        value: childModel,
+      });
+      if (!responseId) return false;
+      const response = await new Promise((resolve) => {
+        const unsubscribe = entry.child.onMessage((message) => {
+          if (message.id !== responseId) return;
+          unsubscribe?.();
+          resolve(message);
+        });
+      });
+      if (response?.error) {
+        log("warn", `child ${entry.provider} rejected model ${childModel}: ${response.error.message || "unknown"}`);
+        return false;
+      }
+      log("info", `parked child ${entry.provider} re-pinned to model ${childModel}`);
+      return true;
+    } catch (err) {
+      log("warn", `model re-pin failed for ${entry.provider}: ${err?.message || err}`);
+      return false;
+    }
+  }
+
+  // (Re)attach a live child to a dialogue that has none — after session/load
+  // restored it from the DB, or when the active child died. The external
+  // sessionId never changes; only the internal child is (re)opened.
+  async function ensureActiveChild(dialogue) {
+    if (dialogue.child) return;
+    if (!dialogue.provider) throw new Error("dialogue has no provider");
+    const pending = dialogue.transcript.getAll().length;
+    const cached = pickChild(dialogue, dialogue.provider);
+    if (cached) {
+      dialogue.child = cached.child;
+      dialogue.childSessionId = cached.childSessionId;
+      dialogue.currentModel = cached.currentModel;
+      log("info", `re-attached child from provider cache: ${dialogue.provider}/${dialogue.childSessionId}`);
+      return;
+    }
+    const model = dialogue.currentModel ? `${dialogue.provider}/${dialogue.currentModel}` : "default";
+    // Prefer native resume: the persisted childSessions snapshot carries the
+    // agent-side session id, and ACP agents with loadSession (codex-acp)
+    // restore full context from it. Unsupported agents fall back to
+    // session/new inside the factory.
+    const resumeSessionId = dialogue.childSessions?.[dialogue.provider]?.childSessionId || null;
+    const child = await openChild({ cwd: dialogue.cwd, mcpServers: [], model, resumeSessionId });
+    if (!child?.sessionId) throw new Error(`target ACP provider ${dialogue.provider} failed to create session`);
+    dialogue.child = child;
+    dialogue.provider = child.provider || dialogue.provider;
+    dialogue.childSessionId = child.sessionId;
+    if (child.currentModel) dialogue.currentModel = child.currentModel;
+    cacheChild(dialogue, {
+      provider: dialogue.provider,
+      child: dialogue.child,
+      childSessionId: dialogue.childSessionId,
+      currentModel: dialogue.currentModel,
+    });
+    if (pending > 0 && !child.resumed) {
+      log("warn", `child ${dialogue.provider} opened fresh after restore; ${pending} transcript entries not replayed into it (M4 replay pending)`);
+    }
+  }
 
   // Render a child catalog into the ACP `models` shape so Zed can show a
   // picker. currentModelId must be one of availableModels or Zed shows an
@@ -131,6 +275,8 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
       transcript: createShadowTranscript(),
       promptInFlight: false,
       configOptions: [],
+      children: new Map(),
+      childSessions: {},
     });
     await persist(zedSessionId, dialogues.get(zedSessionId));
     log("info", `session/new ${zedSessionId} → child ${child.provider}/${child.sessionId}`);
@@ -140,7 +286,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     log("info", `session/new catalog models=${Array.isArray(sharedCatalog) ? sharedCatalog.length : 0}`);
     const rawModelOptions = modelOptions ? modelOptions(child.configOptions || [], sharedCatalog) : { id: "model", category: "model", type: "select", name: "Model", currentValue: sharedCatalog[0]?.modelId || "", options: sharedCatalog.map((entry) => ({ value: entry.modelId ?? entry.id, name: entry.name ?? entry.modelId ?? entry.id })) };
     const sharedModelOptions = Array.isArray(rawModelOptions) ? rawModelOptions[0] : rawModelOptions;
-    const extraOptions = extraOptionsBuilder ? extraOptionsBuilder(child.configOptions || [], sharedCatalog, child.provider || dialogue.provider) : [];
+    const extraOptions = extraOptionsBuilder ? extraOptionsBuilder(child.configOptions || [], sharedCatalog, child.provider || "") : [];
     log("info", `session/new config model options=${sharedModelOptions?.options?.length || 0} extras=${extraOptions.length} ids=${(sharedModelOptions?.options || []).slice(0, 3).map((option) => option.value).join(",")}`);
     reply(id, {
       sessionId: zedSessionId,
@@ -161,6 +307,12 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
 
     const dialogue = dialogues.get(sessionId);
     if (!dialogue) return fail(id, INVALID_PARAMS, "session not found");
+
+    try {
+      await ensureActiveChild(dialogue);
+    } catch (err) {
+      return fail(id, INTERNAL_ERROR, `failed to (re)open child session: ${err?.message || err}`);
+    }
 
     const { child, childSessionId, transcript } = dialogue;
     if (dialogue.promptInFlight) return fail(id, INVALID_PARAMS, "session/prompt already in progress");
@@ -249,7 +401,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     if (!stored) return fail(id, INVALID_PARAMS, "session not found");
     const transcript = createShadowTranscript();
     for (const update of stored.transcript || []) transcript.add(update);
-    const dialogue = { ...stored, child: null, childSessionId: null, transcript, promptInFlight: false };
+    const dialogue = { ...stored, child: null, childSessionId: null, transcript, promptInFlight: false, children: new Map(), childSessions: stored.childSessions || {} };
     dialogues.set(sessionId, dialogue);
     for (const update of transcript.getAll()) sendNotification("session/update", { sessionId, update });
     reply(id, {});
@@ -272,14 +424,49 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
       const childModel = value.slice(provider.length + separator.length);
       if (provider && provider !== dialogue.provider) {
         try {
-          const nextChild = await openChild({ cwd: dialogue.cwd, mcpServers: [], model: value });
-          if (!nextChild?.sessionId) throw new Error(`target ACP provider ${provider} failed to create session`);
-          const previous = dialogue.child;
-          dialogue.child = nextChild;
-          dialogue.provider = nextChild.provider || provider;
-          dialogue.childSessionId = nextChild.sessionId;
-          dialogue.currentModel = childModel;
-          previous?.dispose?.();
+          // Park the outgoing child instead of disposing it: its live agent
+          // context is preserved for a later hop back to this provider.
+          if (dialogue.child) {
+            cacheChild(dialogue, {
+              provider: dialogue.provider,
+              child: dialogue.child,
+              childSessionId: dialogue.childSessionId,
+              currentModel: dialogue.currentModel,
+            });
+          }
+          const cached = pickChild(dialogue, provider);
+          if (cached) {
+            // Live child of the target provider is still around — reuse it and
+            // re-point it at the requested model (fail-open).
+            if (childModel) {
+              const pinned = await pinChildModel(cached, childModel);
+              if (pinned) cached.currentModel = childModel;
+            }
+            dialogue.child = cached.child;
+            dialogue.childSessionId = cached.childSessionId;
+            dialogue.provider = provider;
+            dialogue.currentModel = cached.currentModel;
+            log("info", `switch reuses live child ${provider}/${dialogue.childSessionId} (context preserved)`);
+          } else {
+            const resumeSessionId = dialogue.childSessions?.[provider]?.childSessionId || null;
+            const nextChild = await openChild({ cwd: dialogue.cwd, mcpServers: [], model: value, resumeSessionId });
+            if (!nextChild?.sessionId) throw new Error(`target ACP provider ${provider} failed to create session`);
+            dialogue.child = nextChild;
+            dialogue.provider = nextChild.provider || provider;
+            dialogue.childSessionId = nextChild.sessionId;
+            dialogue.currentModel = childModel;
+            cacheChild(dialogue, {
+              provider: dialogue.provider,
+              child: nextChild,
+              childSessionId: nextChild.sessionId,
+              currentModel: childModel,
+            });
+            const pending = dialogue.transcript.getAll().length;
+            if (pending > 0 && !nextChild.resumed) {
+              log("warn", `child ${dialogue.provider} opened fresh on switch; ${pending} transcript entries not replayed into it (M4 replay pending)`);
+            }
+          }
+          evictChildren(dialogue, dialogue.provider);
           await persist(sessionId, dialogue);
           const modelOption = (dialogue.configOptions || []).find((option) => option.id === "model" || option.category === "model");
           dialogue.configOptions = [
@@ -381,6 +568,9 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     await deleteAcpDialogue(sessionId);
     dialogues.delete(sessionId);
     dialogue?.child?.dispose?.();
+    for (const [, entry] of dialogue?.children || []) {
+      try { entry.child?.dispose?.(); } catch { /* already dead */ }
+    }
     reply(id, {});
   }
 

@@ -118,10 +118,9 @@ describe("ACP server M1 — session/new", () => {
     expect(out[1].id).toBe(2);
     expect(typeof res.sessionId).toBe("string");
     expect(res.sessionId.length).toBeGreaterThan(0);
-    expect(res.models.currentModelId).toBe("gpt-5.4");
+    expect(res.models.currentModelId).toBe("codex-acp/gpt-5.4");
     expect(res.models.availableModels).toEqual([
-      { modelId: "gpt-5.4", name: "gpt-5.4" },
-      { modelId: "gpt-5.4-mini", name: "gpt-5.4-mini" },
+      { modelId: "codex-acp/gpt-5.4", name: "GPT 5.4" },
     ]);
 
     expect(server.dialogues.size).toBe(1);
@@ -167,15 +166,24 @@ describe("ACP server M1 — session/new", () => {
     const { server, out } = harness({ openChild: async () => fakeChild({ currentModel: "" }) });
     await init(server);
     await server.handle({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: CWD } });
-    expect(out[1].result.models.currentModelId).toBe("gpt-5.4");
+    expect(out[1].result.models.currentModelId).toBe("codex-acp/gpt-5.4");
   });
 
-  it("passes configOptions through when the child offers them", async () => {
-    const configOptions = [{ id: "model", label: "Model", type: "select", currentValue: "gpt-5.4", options: [] }];
-    const { server, out } = harness({ openChild: async () => fakeChild({ configOptions }) });
+  it("serves the shared model option built from the shared catalog (not the child's own list)", async () => {
+    const { server, out } = harness();
     await init(server);
     await server.handle({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: CWD } });
-    expect(out[1].result.configOptions).toEqual(configOptions);
+    // The shared option is qualified so Zed's picker can resolve every provider.
+    expect(out[1].result.configOptions).toEqual([
+      {
+        id: "model",
+        category: "model",
+        type: "select",
+        name: "Model",
+        currentValue: "codex-acp/gpt-5.4",
+        options: [{ value: "codex-acp/gpt-5.4", name: "GPT 5.4" }],
+      },
+    ]);
   });
 
   it("rejects a missing cwd with -32602 and spawns nothing", async () => {
@@ -215,7 +223,7 @@ describe("ACP server M4 — model configuration", () => {
     const sessionId = out[1].result.sessionId;
     const row = server.dialogues.get(sessionId);
     row.transcript.add({ type: "agent_message_chunk", content: "keep" });
-    await server.handle({ jsonrpc: "2.0", id: 3, method: "session/set_config_option", params: { sessionId, configId: "model", value: "gpt-5.4-mini" } });
+    await server.handle({ jsonrpc: "2.0", id: 3, method: "session/set_config_option", params: { sessionId, configId: "model", value: "codex-acp/gpt-5.4-mini" } });
     expect(request).toEqual({ method: "session/set_config_option", params: { sessionId: "child-sess-1", configId: "model", value: "gpt-5.4-mini" } });
     expect(out.at(-1)).toMatchObject({ id: 3, result: { configOptions: [{ id: "model" }] } });
     expect(row.currentModel).toBe("gpt-5.4-mini");
@@ -366,7 +374,9 @@ describe("ACP server M2 — session/prompt + streaming + ShadowTranscript", () =
 
     const response = out[out.length - 1];
     expect(response.id).toBe(3);
-    expect(response.result.stopReason).toBe("stop");
+    // The child's stopReason is normalised against the ACP allowlist — a
+    // non-spec value like "stop" surfaces to the client as end_turn.
+    expect(response.result.stopReason).toBe("end_turn");
   });
 
   it("accumulates session/update in the dialogue transcript", async () => {

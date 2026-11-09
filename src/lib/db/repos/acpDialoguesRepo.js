@@ -36,7 +36,7 @@ export async function upsertAcpDialogue(dialogue) {
     cwd: dialogue.cwd || null,
     provider: dialogue.provider || null,
     currentModel: dialogue.currentModel || null,
-    data: stringifyJson({ transcript: dialogue.transcript || [] }),
+    data: stringifyJson({ transcript: dialogue.transcript || [], childSessions: dialogue.childSessions || {} }),
     createdAt: existing?.createdAt || dialogue.createdAt || now,
     updatedAt: now,
   };
