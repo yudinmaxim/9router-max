@@ -71,23 +71,35 @@ function extractPromptText(prompt) {
     .trim();
 }
 
-function buildReplayText(history) {
-  const entries = (history || []).slice(-REPLAY_MAX_ENTRIES);
+function buildHistoryText(entries, intro, outro) {
+  const tail = (entries || []).slice(-REPLAY_MAX_ENTRIES);
   const lines = [];
   let used = 0;
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i];
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const entry = tail[i];
     const line = `${entry.role === "user" ? "User" : "Assistant"}: ${entry.text}`;
     if (used + line.length > REPLAY_MAX_CHARS) break;
     lines.unshift(line);
     used += line.length;
   }
   if (!lines.length) return "";
-  return [
+  return [intro, ...lines, outro].join("\n");
+}
+
+function buildReplayText(history) {
+  return buildHistoryText(
+    history,
     "[Context restore] This dialogue continues an earlier conversation. The transcript below is history for context only — do not answer it, just remember it.",
-    ...lines,
     "[End of history]",
-  ].join("\n");
+  );
+}
+
+function buildDeltaText(entries) {
+  return buildHistoryText(
+    entries,
+    "[Context update] While you were inactive, the conversation continued. The transcript below is history for context only — do not answer it, just remember it.",
+    "[End of update]",
+  );
 }
 
 /**
@@ -150,7 +162,10 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     if (previous?.child && previous.child !== entry.child) {
       try { previous.child.dispose?.(); } catch { /* already dead */ }
     }
-    dialogue.children.set(entry.provider, { ...entry, lastUsedAt: Date.now() });
+    // awareness = how many dialogue.history entries this child has already
+    // seen (natively while active, or via an injected delta). Frozen at park
+    // time; on reactivation only the missing tail is delivered.
+    dialogue.children.set(entry.provider, { ...entry, awareness: entry.awareness ?? (dialogue.history?.length || 0), lastUsedAt: Date.now() });
   }
 
   // Look up a live parked child for a provider and mark it recently used.
@@ -186,6 +201,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
         childSessionId: dialogue.childSessionId,
         currentModel: dialogue.currentModel,
         active: true,
+        awareness: dialogue.history?.length || 0,
         lastUsedAt: new Date().toISOString(),
       };
     }
@@ -195,17 +211,17 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
         childSessionId: entry.childSessionId,
         currentModel: entry.currentModel,
         active: false,
+        awareness: entry.awareness ?? 0,
         lastUsedAt: new Date(entry.lastUsedAt || 0).toISOString(),
       };
     }
     return out;
   }
 
-  // Inject the dialogue history into a freshly opened child so a provider
-  // switch does not lose the conversation. Fail-open: a failed replay must
-  // not block the real prompt — the child simply starts colder.
-  async function replayHistoryIntoChild(dialogue) {
-    const text = buildReplayText(dialogue.history);
+  // Send one synthetic session/prompt carrying reconstructed history and
+  // wait for the child to finish it. Fail-open: a failed injection must not
+  // block the real prompt — the child simply stays colder.
+  async function sendHistoryPrompt(dialogue, text) {
     if (!text || !dialogue.child?.sendRpc) return false;
     try {
       const responseId = dialogue.child.sendRpc("session/prompt", {
@@ -215,17 +231,54 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
       if (!responseId) return false;
       await new Promise((resolve) => {
         const off = dialogue.child.onMessage((msg) => {
+          // Agent→client requests during injection (permissions, fs, …) must
+          // be answered or the child hangs mid-prompt. Permissions are
+          // cancelled — the injection is context-only, tools are not needed.
+          if (msg.method && msg.id !== undefined && msg.id !== null) {
+            const result = msg.method === "session/request_permission"
+              ? { outcome: { outcome: "cancelled" } }
+              : null;
+            dialogue.child.sendRpcRaw?.(result
+              ? { jsonrpc: "2.0", id: msg.id, result }
+              : { jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "not supported during history injection" } });
+            return;
+          }
           if (msg.id !== responseId) return;
           off?.();
           resolve(msg);
         });
       });
-      log("info", `replayed ${dialogue.history.length} history entries into fresh child ${dialogue.provider}`);
       return true;
     } catch (err) {
-      log("warn", `history replay into ${dialogue.provider} failed: ${err?.message || err}`);
+      log("warn", `history injection into ${dialogue.provider} failed: ${err?.message || err}`);
       return false;
     }
+  }
+
+  // Full-history replay for a child that opened completely fresh.
+  async function replayHistoryIntoChild(dialogue) {
+    const ok = await sendHistoryPrompt(dialogue, buildReplayText(dialogue.history));
+    if (ok) log("info", `replayed ${dialogue.history?.length || 0} history entries into fresh child ${dialogue.provider}`);
+    return ok;
+  }
+
+  // Deliver only the history tail a (re)activated child has not seen yet —
+  // the delta accumulated while another provider owned the dialogue.
+  async function deliverHistoryDelta(dialogue, seen) {
+    const history = dialogue.history || [];
+    const from = Math.max(0, Math.min(Number(seen) || 0, history.length));
+    if (from >= history.length) return true;
+    const ok = await sendHistoryPrompt(dialogue, buildDeltaText(history.slice(from)));
+    if (ok) log("info", `delivered ${history.length - from} history delta entries into ${dialogue.provider}`);
+    return ok;
+  }
+
+  // Bring a reused/parked or natively-resumed child up to date with the
+  // unified dialogue history, then mark how much it has seen.
+  async function syncChildAwareness(dialogue, entry) {
+    const ok = await deliverHistoryDelta(dialogue, entry?.awareness ?? 0);
+    if (ok && entry) entry.awareness = dialogue.history?.length || 0;
+    return ok;
   }
 
   // Re-point a reused child at the dialogue's current model. Fail-open: a
@@ -271,6 +324,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
       dialogue.childSessionId = cached.childSessionId;
       dialogue.currentModel = cached.currentModel;
       log("info", `re-attached child from provider cache: ${dialogue.provider}/${dialogue.childSessionId}`);
+      await syncChildAwareness(dialogue, cached);
       return;
     }
     const model = dialogue.currentModel ? `${dialogue.provider}/${dialogue.currentModel}` : "default";
@@ -291,7 +345,16 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
       childSessionId: dialogue.childSessionId,
       currentModel: dialogue.currentModel,
     });
-    if (pending > 0 && !child.resumed) {
+    if (child.resumed) {
+      // Native resume restored the child's own past, but not the turns other
+      // providers exchanged meanwhile — deliver just that delta.
+      const seen = Number(dialogue.childSessions?.[dialogue.provider]?.awareness) || 0;
+      const ok = await deliverHistoryDelta(dialogue, seen);
+      if (!ok) {
+        const entry = dialogue.children?.get(dialogue.provider);
+        if (entry) entry.awareness = seen;
+      }
+    } else if (pending > 0) {
       const replayed = await replayHistoryIntoChild(dialogue);
       if (!replayed) log("warn", `child ${dialogue.provider} opened fresh after restore; ${pending} transcript entries not replayed`);
     }
@@ -529,6 +592,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
             dialogue.childSessionId = cached.childSessionId;
             dialogue.provider = provider;
             dialogue.currentModel = cached.currentModel;
+            await syncChildAwareness(dialogue, cached);
             log("info", `switch reuses live child ${provider}/${dialogue.childSessionId} (context preserved)`);
           } else {
             const resumeSessionId = dialogue.childSessions?.[provider]?.childSessionId || null;
@@ -544,10 +608,19 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
               childSessionId: nextChild.sessionId,
               currentModel: childModel,
             });
-            const pending = dialogue.transcript.getAll().length;
-            if (pending > 0 && !nextChild.resumed) {
-              const replayed = await replayHistoryIntoChild(dialogue);
-              if (!replayed) log("warn", `child ${dialogue.provider} opened fresh on switch; ${pending} transcript entries not replayed`);
+            if (nextChild.resumed) {
+              const seen = Number(dialogue.childSessions?.[dialogue.provider]?.awareness) || 0;
+              const ok = await deliverHistoryDelta(dialogue, seen);
+              if (!ok) {
+                const entry = dialogue.children?.get(dialogue.provider);
+                if (entry) entry.awareness = seen;
+              }
+            } else {
+              const pending = dialogue.transcript.getAll().length;
+              if (pending > 0) {
+                const replayed = await replayHistoryIntoChild(dialogue);
+                if (!replayed) log("warn", `child ${dialogue.provider} opened fresh on switch; ${pending} transcript entries not replayed`);
+              }
             }
           }
           evictChildren(dialogue, dialogue.provider);
