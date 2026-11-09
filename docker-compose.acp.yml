@@ -1,0 +1,51 @@
+# Thin ACP sandbox: dev-server.js multi-provider ACP endpoint.
+# network_mode: host → all agent egress follows the HOST VPN (no gluetun).
+# Auth/state dirs are bind-mounted from the host so the container sees the
+# same CLI credentials (~/.codex, opencode, omp) as host processes.
+# Repo is mounted read-only at /workspace — run the working-tree code, not
+# the image's baked /app copy.
+#
+#   docker compose -f docker-compose.acp.yml up -d
+#   logs: docker compose -f docker-compose.acp.yml logs -f
+services:
+  acp-sandbox:
+    image: 9router:experimental-vpn
+    container_name: acp-sandbox
+    network_mode: host
+    environment:
+      NODE_ENV: production
+      # Image bakes DATA_DIR=/app/data and HOME stays /root under gosu —
+      # point both at the node user's home so DB, catalogs and agent auth
+      # resolve into the mounted host directories.
+      HOME: /home/node
+      DATA_DIR: /home/node/.9router
+      PORT: "20229"
+      ACP_PROVIDERS: "codex-acp,opencode-acp,omp-acp"
+      NODE_OPTIONS: "--experimental-loader /workspace/alias-loader.mjs"
+      CLI_OPENCODE_BIN: /home/maxim/.opencode/bin/opencode
+      CLI_OMP_BIN: /home/maxim/.local/bin/omp
+      CLI_CODEX_BIN: /home/maxim/.nvm/versions/node/v24.19.0/bin/codex
+      PATH: /home/maxim/.local/bin:/home/maxim/.opencode/bin:/home/maxim/.nvm/versions/node/v24.19.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    volumes:
+      # Router state: SQLite DB (acpDialogues), ACP model catalogs, usage logs.
+      - /home/maxim/.9router:/home/node/.9router
+      # Agent credentials and state.
+      - /home/maxim/.codex:/home/node/.codex
+      - /home/maxim/.config/opencode:/home/node/.config/opencode
+      - /home/maxim/.local/share/opencode:/home/node/.local/share/opencode
+      - /home/maxim/.local/state/opencode:/home/node/.local/state/opencode
+      # Plugin/npm cache — opencode session/new 503s without it
+      # ("Location plugins did not finish activating").
+      - /home/maxim/.cache/opencode:/home/node/.cache/opencode
+      - /home/maxim/.omp:/home/node/.omp
+      # Read-only access to host-installed agent binaries.
+      - /home/maxim/.local/bin:/home/maxim/.local/bin:ro
+      - /home/maxim/.opencode/bin:/home/maxim/.opencode/bin:ro
+      - /home/maxim/.nvm:/home/maxim/.nvm:ro
+      # Working tree (read-only): latest ACP code + node_modules.
+      - /home/maxim/Projects/personal-projects/9router-max-exp:/workspace:ro
+      # node_modules in the worktree is a symlink into the sibling checkout;
+      # mount the real directory so the symlink resolves inside the container.
+      - /home/maxim/Projects/personal-projects/9router-max/node_modules:/home/maxim/Projects/personal-projects/9router-max/node_modules:ro
+    command: ["node", "/workspace/open-sse/acp/dev-server.js"]
+    restart: unless-stopped
