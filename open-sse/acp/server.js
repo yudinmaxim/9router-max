@@ -89,7 +89,7 @@ function buildHistoryText(entries, intro, outro) {
 function buildReplayText(history) {
   return buildHistoryText(
     history,
-    "[Context restore] This dialogue continues an earlier conversation. The transcript below is history for context only — do not answer it, just remember it.",
+    "[Context restore] This dialogue continues an earlier conversation. The transcript below is history for context only — do not answer it, just remember it. Reply with exactly: OK",
     "[End of history]",
   );
 }
@@ -97,7 +97,7 @@ function buildReplayText(history) {
 function buildDeltaText(entries) {
   return buildHistoryText(
     entries,
-    "[Context update] While you were inactive, the conversation continued. The transcript below is history for context only — do not answer it, just remember it.",
+    "[Context update] While you were inactive, the conversation continued. The transcript below is history for context only — do not answer it, just remember it. Reply with exactly: OK",
     "[End of update]",
   );
 }
