@@ -92,6 +92,26 @@ function buildHistoryText(entries, intro, outro) {
   return [intro, ...lines, outro].join("\n");
 }
 
+// Map the ACP session/prompt `usage` object onto the token keys
+// usageRepo/saveRequestUsage understands. Agents report slightly
+// different shapes (codex: inputTokens/outputTokens/totalTokens/
+// thoughtTokens/cachedReadTokens; others may send OpenAI-style names) —
+// accept both, keep the extras for the raw `tokens` blob.
+function acpUsageToTokens(usage) {
+  if (!usage || typeof usage !== "object") return {};
+  const input = usage.inputTokens ?? usage.prompt_tokens ?? usage.input ?? 0;
+  const output = usage.outputTokens ?? usage.completion_tokens ?? usage.output ?? 0;
+  const total = usage.totalTokens ?? usage.total_tokens ?? (input + output);
+  if (!input && !output && !total) return {};
+  return {
+    prompt_tokens: input,
+    completion_tokens: output,
+    total_tokens: total,
+    ...(usage.thoughtTokens != null ? { thought_tokens: usage.thoughtTokens } : {}),
+    ...(usage.cachedReadTokens != null ? { cached_read_tokens: usage.cachedReadTokens } : {}),
+  };
+}
+
 // Context the child has not seen is merged into the next real prompt as a
 // prefix — one model turn instead of a separate injection turn. The intro
 // must make clear the transcript is background, not the request itself.
@@ -417,6 +437,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     trackPendingRequest(accountingModel, dialogue.provider, dialogue.connectionId, true);
     let promptResult = null;
     let stopReason = null;
+    let promptUsage = null;
 
     let unsubscribePrompt = null;
     const onceResult = new Promise((resolve) => {
@@ -460,6 +481,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
           stopReason = ["end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"].includes(msg.result?.stopReason)
             ? msg.result.stopReason
             : "end_turn";
+          promptUsage = msg.result?.usage || null;
           unsubscribePrompt?.();
           resolve();
         }
@@ -491,7 +513,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
         provider: dialogue.provider,
         model: accountingModel,
         connectionId: dialogue.connectionId,
-        tokens: {},
+        tokens: acpUsageToTokens(promptUsage),
         status,
         endpoint: "acp",
       }).catch((err) => log("error", `ACP usage persistence failed: ${err?.message || err}`));
