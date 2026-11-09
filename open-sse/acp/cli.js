@@ -8,13 +8,12 @@
  * It reuses createAcpTransport for framing, so no protocol duplication.
  * Logs go strictly to stderr — stdout is reserved for JSON-RPC.
  *
- * Provider selection (M4): for now, hardcodes codex-acp. The full
- * provider-resolve logic from _meta/settings is deferred to M4.
+ * Provider set comes from ACP_PROVIDERS (default codex-acp,opencode-acp);
+ * see providers.js for the shared dispatcher/catalog used by dev-server.js.
  */
 import { createAcpTransport } from "../executors/lib/acpTransport.js";
 import { createAcpServer } from "./server.js";
-import { createChildFactory } from "./factory.js";
-import { getExecutor } from "../executors/index.js";
+import { createAcpProviders } from "./providers.js";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -23,22 +22,14 @@ async function main() {
     process.exit(1);
   }
 
+  // createAcpTransport is built for child processes: it writes to
+  // `child.stdin` and reads `child.stdout`. For the server side the roles
+  // are inverted — replies must go to OUR stdout and requests arrive on OUR
+  // stdin — so the streams are passed swapped.
   const transport = createAcpTransport({
-    stdin: process.stdin,
-    stdout: process.stdout,
+    stdin: process.stdout,
+    stdout: process.stdin,
   });
-
-  const modelCatalog = () => {
-    const models = [];
-    const acpProviders = ["codex-acp", "cursor-acp", "opencode-acp"];
-    for (const providerId of acpProviders) {
-      const executor = getExecutor(providerId);
-      if (executor?.acp) {
-        models.push({ modelId: providerId, name: providerId });
-      }
-    }
-    return models;
-  };
 
   const log = (level, msg) => {
     try {
@@ -48,22 +39,12 @@ async function main() {
     }
   };
 
-  const providerId = "codex-acp";
-  const executor = getExecutor(providerId);
-  if (!executor?.acp) {
-    log("error", `provider ${providerId} has no ACP spec`);
-    process.exit(1);
-  }
-
-  const factory = createChildFactory({
-    providerId,
-    spec: executor.acp,
-    log,
-  });
+  const { openChild, modelCatalog, providerIds } = createAcpProviders({ log });
+  log("info", `ACP providers: ${providerIds.join(",")}`);
 
   const server = createAcpServer({
     write: (frame) => transport.sendRaw(frame),
-    openChild: factory.openChild,
+    openChild,
     modelCatalog,
     log,
     clientInfo: { name: "9router", version: "1.0" },
