@@ -17,6 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { acpAgentStateDir } from "./acpAdapter.js";
+import { isSelfRouted } from "./acpBase.js";
 
 const PROBE_TIMEOUT_MS = 20000;
 const PROBE_ID_INIT = 1;
@@ -168,6 +169,14 @@ export function probeAcpCatalog(bin, spec, extraEnv = {}, timeoutMs = PROBE_TIME
           }
           const result = msg.result || {};
           const options = (result.configOptions || []).map(normalizeOption).filter((o) => o.options.length);
+          // Screen out ids that route back into this gateway — users do
+          // configure their CLIs that way (omp's `nine-router/...` entries),
+          // and publishing them would loop agent → router → agent.
+          for (const opt of options) {
+            if (opt.category === "model" || opt.id === "model") {
+              opt.options = opt.options.filter((o) => !isSelfRouted(o.value));
+            }
+          }
           const modelOption = options.find((o) => o.category === "model" || o.id === "model");
           // The model list is the model option's values. An agent that instead
           // returns a flat `availableModels` (cursor) lands here too.
@@ -184,7 +193,7 @@ export function probeAcpCatalog(bin, spec, extraEnv = {}, timeoutMs = PROBE_TIME
             name: m.name || m.value,
             description: m.description || null,
             current: m.value === modelOption?.currentValue,
-          }));
+          })).filter((m) => !isSelfRouted(m.id));
           done(resolve, { models, options, sessionId: result.sessionId || null });
           return;
         }
