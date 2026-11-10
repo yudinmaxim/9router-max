@@ -30,6 +30,7 @@ wss.on("connection", (socket) => {
   });
 });
 
-httpServer.listen(port, "127.0.0.1", () => {
-  console.error(`[acp] ws://127.0.0.1:${port}/api/acp/ws providers=${providerIds.join(",")}`);
+const bindHost = process.env.ACP_BIND || "127.0.0.1";
+httpServer.listen(port, bindHost, () => {
+  console.error(`[acp] ws://${bindHost}:${port}/api/acp/ws providers=${providerIds.join(",")}`);
 });
