@@ -1,6 +1,8 @@
 import { EventEmitter } from "events";
+import os from "node:os";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { makeKv } from "../helpers/kvStore.js";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { NOAUTH_CONNECTION_ID, NOAUTH_ACCOUNT_NAME } from "@/shared/constants/noauth.js";
 import { classifyByProviderList, classifyModelTier, rollUpTiers } from "@/lib/quotaTiers";
@@ -36,6 +38,20 @@ const pendingTimers = global._pendingTimers;
 const recentRing = global._recentRing;
 const connCache = global._connectionMapCache;
 const statsEmitTimers = global._statsEmitTimers;
+const acpActivityKv = makeKv("acpActivity");
+
+// Cross-process ACP activity TTL: entries older than this are treated as
+// dead even when the pid check cannot run (container/other pid namespace).
+const ACP_ACTIVITY_TTL_MS = 30 * 60 * 1000;
+
+function isPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === "EPERM";
+  }
+}
 
 export const statsEmitter = global._statsEmitter;
 
@@ -247,6 +263,27 @@ export async function getActiveRequests() {
       }
     }
   }
+
+  // ACP agents run in their own processes (Zed spawns cli.js per thread), so
+  // their in-flight prompts never reach pendingRequests — they mirror
+  // themselves into the kv store instead. Merge those here, dropping stale
+  // entries (dead pid on this host, or older than the TTL).
+  try {
+    const rows = await acpActivityKv.getAll();
+    const now = Date.now();
+    const hostname = os.hostname();
+    for (const value of Object.values(rows)) {
+      if (!value || typeof value !== "object") continue;
+      if (now - (value.startedAt || 0) > ACP_ACTIVITY_TTL_MS) continue;
+      if (value.hostname === hostname && value.pid && !isPidAlive(value.pid)) continue;
+      activeRequests.push({
+        model: value.model || "unknown",
+        provider: value.provider || "unknown",
+        account: value.account || NOAUTH_ACCOUNT_NAME,
+        count: 1,
+      });
+    }
+  } catch { /* kv store unavailable — in-process view still applies */ }
 
   await ensureRingInitialized();
   const seen = new Set();

@@ -27,6 +27,7 @@ export async function GET() {
           statsEmitter.off("update", state.send);
           statsEmitter.off("pending", state.sendPending);
           clearInterval(state.keepalive);
+          clearInterval(state.poll);
         }
       };
 
@@ -42,6 +43,7 @@ export async function GET() {
           statsEmitter.off("update", state.send);
           statsEmitter.off("pending", state.sendPending);
           clearInterval(state.keepalive);
+          clearInterval(state.poll);
         }
       };
 
@@ -59,6 +61,11 @@ export async function GET() {
           clearInterval(state.keepalive);
         }
       }, 25000);
+
+      // Cross-process activity (ACP agents write pending markers to the kv
+      // store, not this process's emitter) never fires statsEmitter — poll
+      // the lightweight path so the diagram reflects it without a page reload.
+      state.poll = setInterval(() => { state.sendPending?.(); }, 3000);
     },
 
     cancel() {
@@ -66,6 +73,7 @@ export async function GET() {
       statsEmitter.off("update", state.send);
       statsEmitter.off("pending", state.sendPending);
       clearInterval(state.keepalive);
+      clearInterval(state.poll);
     },
   });
 

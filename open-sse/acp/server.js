@@ -19,9 +19,26 @@
  * whole external contract testable against a fake child.
  */
 import { randomUUID } from "node:crypto";
+import os from "node:os";
 import { createShadowTranscript } from "./transcript.js";
 import { getAcpDialogueById, getAcpDialogues, upsertAcpDialogue, deleteAcpDialogue } from "../../src/lib/db/repos/acpDialoguesRepo.js";
 import { trackPendingRequest, saveRequestUsage } from "../../src/lib/usageDb.js";
+import { makeKv } from "../../src/lib/db/helpers/kvStore.js";
+
+// In-flight prompts are mirrored into the shared kv store: the dashboard's
+// pending-request map is per-process memory, and this server usually runs
+// in its own process (Zed spawns cli.js per thread), so without this the
+// usage diagram never sees ACP activity. Readers filter stale entries by
+// age and dead pid.
+const acpActivity = makeKv("acpActivity");
+const ACP_ACTIVITY_VALUE = (provider, model, sessionId) => ({
+  provider,
+  model,
+  account: `ACP·${String(sessionId).slice(0, 8)}`,
+  startedAt: Date.now(),
+  pid: process.pid,
+  hostname: os.hostname(),
+});
 
 // Agent capabilities we can honestly advertise. loadSession is guaranteed by
 // our own ShadowTranscript (M3), not by the child, so it is always safe to
@@ -435,6 +452,8 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     let assistantText = "";
     const accountingModel = dialogue.currentModel || dialogue.provider || "default";
     trackPendingRequest(accountingModel, dialogue.provider, dialogue.connectionId, true);
+    const activityKey = `${sessionId}:${String(id)}`;
+    acpActivity.set(activityKey, ACP_ACTIVITY_VALUE(dialogue.provider, accountingModel, sessionId)).catch(() => {});
     let promptResult = null;
     let stopReason = null;
     let promptUsage = null;
@@ -494,6 +513,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     if (!promptResult) {
       unsubscribePrompt?.();
       dialogue.promptInFlight = false;
+      acpActivity.remove(activityKey).catch(() => {});
       return fail(id, INTERNAL_ERROR, "failed to send session/prompt to child");
     }
 
@@ -517,6 +537,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
         status,
         endpoint: "acp",
       }).catch((err) => log("error", `ACP usage persistence failed: ${err?.message || err}`));
+      acpActivity.remove(activityKey).catch(() => {});
       dialogue.promptInFlight = false;
     }
   }
