@@ -44,6 +44,10 @@ services:
       - /home/maxim/.nvm:/home/maxim/.nvm:ro
       # Working tree (read-only): latest ACP code + node_modules.
       - /home/maxim/Projects/personal-projects/9router-max-exp:/workspace:ro
+      # Project workspaces: ACP children spawn with cwd=<zed thread dir>;
+      # without this mount spawn() fails ENOENT and (pre-hardening) crashed
+      # the whole dev-server.
+      - /home/maxim/Projects:/home/maxim/Projects
       # node_modules in the worktree is a symlink into the sibling checkout;
       # mount the real directory so the symlink resolves inside the container.
       - /home/maxim/Projects/personal-projects/9router-max/node_modules:/home/maxim/Projects/personal-projects/9router-max/node_modules:ro

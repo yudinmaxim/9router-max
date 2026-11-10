@@ -72,6 +72,26 @@ export function createChildFactory({ providerId, spec, resolveContext = async ()
     });
     child.stderr?.on("data", (chunk) => log("debug", `ACP child stderr: ${chunk.toString().trim()}`));
 
+    // spawn() emits 'error' (ENOENT binary, missing cwd, …) and 'exit'
+    // asynchronously; without a listener the first one is an unhandled
+    // 'error' event that kills the whole server process. Convert both into
+    // a rejection raced against the handshake below — a failed child must
+    // fail this openChild call, never the ACP server.
+    let rejectSpawn;
+    const spawnFailed = new Promise((_, reject) => { rejectSpawn = reject; });
+    spawnFailed.catch(() => {});
+    let handshakeDone = false;
+    child.once("error", (err) => {
+      log("error", `child spawn failed provider=${providerId}: ${err?.message || err}`);
+      rejectSpawn(err);
+    });
+    child.once("exit", (code, signal) => {
+      if (handshakeDone) return;
+      log("warn", `child exited during handshake provider=${providerId} code=${code} signal=${signal || "-"}`);
+      rejectSpawn(new Error(`child exited during handshake (code=${code} signal=${signal || "-"})`));
+    });
+    const raceSpawn = (p) => Promise.race([p, spawnFailed]);
+
     const core = createAcpClientCore({
       child,
       trace: (event, data) => log("debug", `ACP trace ${event}: ${JSON.stringify(data)}`),
@@ -104,6 +124,7 @@ export function createChildFactory({ providerId, spec, resolveContext = async ()
       core.onMessage(onMessage);
     });
 
+    try {
     initializeId = core.sendRpc("initialize", {
       protocolVersion: PROTOCOL_VERSION,
       clientInfo: { name: "9router", version: "1.0" },
@@ -111,19 +132,19 @@ export function createChildFactory({ providerId, spec, resolveContext = async ()
     });
 
     if (!initializeId) throw new Error("failed to send initialize request");
-    await onceInitialized;
+    await raceSpawn(onceInitialized);
 
     let resumed = false;
     if (resumeSessionId) {
       const loadId = core.sendRpc("session/load", { sessionId: resumeSessionId, cwd, mcpServers });
       if (loadId) {
-        const loadResponse = await new Promise((resolve) => {
+        const loadResponse = await raceSpawn(new Promise((resolve) => {
           const onMessage = (msg) => {
             if (msg.id !== loadId) return;
             resolve(msg);
           };
           core.onMessage(onMessage);
-        });
+        }));
         if (!loadResponse?.error) {
           sessionResult = loadResponse.result || {};
           if (!sessionResult.sessionId) sessionResult.sessionId = resumeSessionId;
@@ -144,7 +165,7 @@ export function createChildFactory({ providerId, spec, resolveContext = async ()
         throw new Error("failed to send session/new request");
       }
 
-      await onceSessionNew;
+      await raceSpawn(onceSessionNew);
     }
 
     const sessionId = sessionResult?.sessionId || "";
@@ -154,18 +175,23 @@ export function createChildFactory({ providerId, spec, resolveContext = async ()
       const supported = (modelOption?.options || []).some((option) => (typeof option === "string" ? option : option.value) === modelId);
       if (supported) {
         const setModelId = core.sendRpc("session/set_config_option", { sessionId, configId: "model", value: modelId });
-        await new Promise((resolve, reject) => {
+        await raceSpawn(new Promise((resolve, reject) => {
           const onMessage = (msg) => {
             if (msg.id !== setModelId) return;
             if (msg.error) reject(new Error(msg.error.message || "child model selection failed"));
             else resolve();
           };
           core.onMessage(onMessage);
-        });
+        }));
         currentModel = modelId;
       }
     }
 
+    handshakeDone = true;
+    } catch (err) {
+      try { child.kill(); } catch {}
+      throw err;
+    }
     return {
       provider,
       connectionId: context.connectionId || null,
