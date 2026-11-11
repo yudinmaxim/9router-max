@@ -271,6 +271,14 @@ export async function proxy(request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // CORS preflights never carry credentials — blocking them here makes
+  // every browser-based API client (OnlyOffice AI, web UIs) fail with a
+  // generic "connection error". Let OPTIONS through to the route handlers,
+  // which answer with the Access-Control-* headers.
+  if (request.method === "OPTIONS" && isPublicLlmApi(pathname)) {
+    return NextResponse.next();
+  }
+
   if (isPublicLlmApi(pathname)) {
     if (await canAccessPublicLlmApi(request)) return NextResponse.next();
     return NextResponse.json({ error: "API key required for remote API access" }, { status: 401 });
