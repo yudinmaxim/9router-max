@@ -193,19 +193,30 @@ export function shortAccountLabel(connection) {
 /**
  * Which connections earn a chip in the header.
  *
- * Only the ones the operator ticked. The header used to decide for itself —
- * one chip per provider, the scale closest to running out — and a global
- * switch turned the whole strip on or off. Both are gone: the checkbox on the
- * widget card is the only control, so a chip is in the header because it was
- * asked for, not because the numbers looked tight.
+ * Pinned connections always win. For providers without a pinned connection,
+ * keep one active connection automatically, so a newly connected Codex account
+ * can appear without an extra UI action.
  *
  * @param {Array<{id:string,provider:string,isActive?:boolean}>} connections
  * @param {string[]} pinnedIds
  */
 export function chooseHeaderConnections(connections, pinnedIds) {
   const all = Array.isArray(connections) ? connections : [];
-  const pins = Array.isArray(pinnedIds) ? pinnedIds : [];
-  return all.filter((c) => pins.includes(c.id));
+  const pins = new Set((Array.isArray(pinnedIds) ? pinnedIds : []).map(String));
+  const pinned = all.filter((c) => pins.has(String(c.id)));
+  const providersWithPin = new Set(pinned.map((c) => c.provider));
+  const chosen = new Map(pinned.map((c) => [c.id, c]));
+  const seenProviders = new Set();
+
+  for (const connection of all) {
+    if (connection?.isActive === false) continue;
+    if (providersWithPin.has(connection.provider)) continue;
+    if (seenProviders.has(connection.provider)) continue;
+    seenProviders.add(connection.provider);
+    chosen.set(connection.id, connection);
+  }
+
+  return [...chosen.values()];
 }
 
 /**

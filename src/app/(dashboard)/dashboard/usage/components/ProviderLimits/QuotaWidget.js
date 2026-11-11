@@ -40,7 +40,7 @@ export default function QuotaWidget({
   if (!quota) return null;
 
   // Cursor's billing API answers with its own bars; nothing else sends them.
-  if (quota.spendBars) {
+  if ((provider === "cursor" || provider === "cursor-acp") && quota.spendBars) {
     return <CursorQuotaWidget spendBars={quota.spendBars} planLimits={quota.planLimits} translate={translate} />;
   }
 

@@ -72,7 +72,7 @@ async function loadChips() {
           id: `${connection.id}:${quota.label}`,
           provider,
           connectionId: connection.id,
-          pinned: pinnedIds.includes(connection.id),
+          pinned: pinnedIds.map(String).includes(String(connection.id)),
           label: connection.displayName || connection.name || providerLabel(provider),
           account: shortAccountLabel(connection),
           quota,
