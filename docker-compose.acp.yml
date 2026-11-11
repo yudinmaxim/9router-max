@@ -21,6 +21,7 @@ services:
       DATA_DIR: /home/node/.9router
       PORT: "20229"
       ACP_PROVIDERS: "codex-acp,opencode-acp"
+      ACP_MODEL_ALLOW: "codex-acp/*,opencode-acp/opencode/*"
       NODE_OPTIONS: "--experimental-loader /workspace/alias-loader.mjs"
       CLI_OPENCODE_BIN: /home/maxim/.opencode/bin/opencode
       CLI_OMP_BIN: /home/maxim/.local/bin/omp

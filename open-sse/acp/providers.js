@@ -13,6 +13,26 @@ import { readCachedCatalog } from "../executors/lib/acpCatalog.js";
 
 export const DEFAULT_ACP_PROVIDERS = "codex-acp,opencode-acp";
 
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// ACP_MODEL_ALLOW: comma-separated glob patterns matched against the
+// advertised `providerId/modelId` (e.g. "opencode-acp/opencode/*").
+// Empty/unset → every catalog model is offered. Filtering only hides
+// entries from the picker; an explicit model id still routes normally.
+function modelAllowed(modelId, env = process.env) {
+  const patterns = (env.ACP_MODEL_ALLOW || "")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (!patterns.length) return true;
+  return patterns.some((p) => {
+    const re = new RegExp(`^${p.split("*").map(escapeRe).join(".*")}$`);
+    return re.test(modelId);
+  });
+}
+
 export function providerIdsFromEnv(env = process.env) {
   return (env.ACP_PROVIDERS || DEFAULT_ACP_PROVIDERS)
     .split(",")
@@ -62,11 +82,15 @@ export function createAcpProviders({ providerIds = providerIdsFromEnv(), log = (
     for (const providerId of factories.keys()) {
       const cached = readCachedCatalog(providerId);
       const models = cached?.models || [];
+      const before = out.length;
       if (models.length) {
         for (const m of models) {
-          out.push({ modelId: `${providerId}/${m.id}`, name: `${providerId}: ${m.name || m.id}` });
+          const modelId = `${providerId}/${m.id}`;
+          if (!modelAllowed(modelId)) continue;
+          out.push({ modelId, name: `${providerId}: ${m.name || m.id}` });
         }
-      } else {
+      }
+      if (out.length === before) {
         out.push({ modelId: providerId, name: `${providerId} (default model)` });
       }
     }
