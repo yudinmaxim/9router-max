@@ -556,7 +556,24 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     // leaves loaded threads with no selectable models. Mirror session/new's
     // payload, pointing currentValue at the stored selection.
     const sharedCatalog = modelCatalog ? await modelCatalog() : [];
-    const currentModel = stored.currentModel || sharedCatalog[0]?.modelId || "";
+    const catalogIds = new Set(sharedCatalog.map((entry) => entry.modelId ?? entry.id));
+    // stored.currentModel is child-level ("gpt-5.6-luna",
+    // "opencode/glm-5.3-flash-free"); picker ids are provider-qualified.
+    let currentModel = "";
+    if (stored.currentModel && stored.provider) {
+      currentModel = stored.currentModel.startsWith(`${stored.provider}/`) || stored.currentModel.startsWith(`${stored.provider}::`)
+        ? stored.currentModel
+        : `${stored.provider}/${stored.currentModel}`;
+      // Effort-suffixed ids ("gpt-6-luna[low]") are not catalog entries —
+      // display the base model so the picker shows a real selection.
+      if (!catalogIds.has(currentModel)) {
+        const base = currentModel.replace(/\[.*\]$/, "");
+        if (catalogIds.has(base)) currentModel = base;
+      }
+    }
+    if (!currentModel || (catalogIds.size && !catalogIds.has(currentModel))) {
+      currentModel = sharedCatalog[0]?.modelId || "";
+    }
     const rawModelOptions = modelOptions
       ? modelOptions(stored.configOptions || [], sharedCatalog)
       : { id: "model", category: "model", type: "select", name: "Model", currentValue: currentModel, options: sharedCatalog.map((entry) => ({ value: entry.modelId ?? entry.id, name: entry.name ?? entry.modelId ?? entry.id })) };
@@ -581,7 +598,29 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     }
     const dialogue = dialogues.get(sessionId);
     if (!dialogue) return fail(id, INVALID_PARAMS, "session not found");
-    if (!dialogue.child) return fail(id, INTERNAL_ERROR, "child session unavailable");
+
+    if (!dialogue.child) {
+      // Fresh session/load leaves the child lazy — it only spawns on the
+      // first prompt. Zed still sends set_config_option when the user picks
+      // a model, so record the selection and let ensureActiveChild open the
+      // right provider on the next prompt instead of erroring out.
+      if (configId === "model" && typeof value === "string" && (value.includes("::") || value.includes("/"))) {
+        const sep = value.includes("::") ? "::" : "/";
+        const provider = value.split(sep, 1)[0];
+        const childModel = value.slice(provider.length + sep.length);
+        if (provider && childModel) {
+          dialogue.provider = provider;
+          dialogue.currentModel = childModel;
+          const modelOption = (dialogue.configOptions || []).find((option) => option.id === "model" || option.category === "model");
+          dialogue.configOptions = [
+            { ...(modelOption || { id: "model", category: "model", type: "select", name: "Model", options: [] }), currentValue: value },
+            ...(dialogue.configOptions || []).filter((option) => option !== modelOption),
+          ];
+          return reply(id, { configOptions: dialogue.configOptions });
+        }
+      }
+      return fail(id, INTERNAL_ERROR, "child session unavailable");
+    }
 
     if (configId === "model" && typeof value === "string") {
       const separator = value.includes("::") ? "::" : "/";
