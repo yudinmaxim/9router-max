@@ -124,6 +124,8 @@ export function createChildFactory({ providerId, spec, resolveContext = async ()
       core.onMessage(onMessage);
     });
 
+    let sessionId = "";
+    let resumed = false;
     try {
     initializeId = core.sendRpc("initialize", {
       protocolVersion: PROTOCOL_VERSION,
@@ -134,7 +136,6 @@ export function createChildFactory({ providerId, spec, resolveContext = async ()
     if (!initializeId) throw new Error("failed to send initialize request");
     await raceSpawn(onceInitialized);
 
-    let resumed = false;
     if (resumeSessionId) {
       const loadId = core.sendRpc("session/load", { sessionId: resumeSessionId, cwd, mcpServers });
       if (loadId) {
@@ -168,7 +169,7 @@ export function createChildFactory({ providerId, spec, resolveContext = async ()
       await raceSpawn(onceSessionNew);
     }
 
-    const sessionId = sessionResult?.sessionId || "";
+    sessionId = sessionResult?.sessionId || "";
     if (model && model !== "default") {
       const modelId = model;
       const modelOption = (sessionResult?.configOptions || []).find((option) => option.id === "model" || option.category === "model");
