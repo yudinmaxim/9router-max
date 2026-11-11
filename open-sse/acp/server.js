@@ -552,7 +552,24 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     const dialogue = { ...stored, child: null, childSessionId: null, transcript, promptInFlight: false, children: new Map(), childSessions: stored.childSessions || {} };
     dialogues.set(sessionId, dialogue);
     for (const update of transcript.getAll()) sendNotification("session/update", { sessionId, update });
-    reply(id, {});
+    // Zed rebuilds the model picker from the session response — a bare {}
+    // leaves loaded threads with no selectable models. Mirror session/new's
+    // payload, pointing currentValue at the stored selection.
+    const sharedCatalog = modelCatalog ? await modelCatalog() : [];
+    const currentModel = stored.currentModel || sharedCatalog[0]?.modelId || "";
+    const rawModelOptions = modelOptions
+      ? modelOptions(stored.configOptions || [], sharedCatalog)
+      : { id: "model", category: "model", type: "select", name: "Model", currentValue: currentModel, options: sharedCatalog.map((entry) => ({ value: entry.modelId ?? entry.id, name: entry.name ?? entry.modelId ?? entry.id })) };
+    const sharedModelOptions = Array.isArray(rawModelOptions) ? rawModelOptions[0] : rawModelOptions;
+    if (currentModel) sharedModelOptions.currentValue = currentModel;
+    const extraOptions = extraOptionsBuilder ? extraOptionsBuilder(stored.configOptions || [], sharedCatalog, stored.provider || "") : [];
+    dialogue.configOptions = [sharedModelOptions, ...extraOptions];
+    reply(id, {
+      sessionId,
+      models: buildModels(sharedCatalog, currentModel || null),
+      configOptions: dialogue.configOptions,
+      _meta: { modelCatalogSource: "9router-shared" },
+    });
   }
 
   async function onSessionSetConfigOption(id, params) {
