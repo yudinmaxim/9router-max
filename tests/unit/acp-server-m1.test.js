@@ -243,10 +243,11 @@ describe("ACP server M3 — persistence and replay", () => {
       await upsertAcpDialogue({ id: sessionId, cwd: CWD, provider: dialogue.provider, currentModel: dialogue.currentModel, transcript: dialogue.transcript.getAll() });
       const second = harness();
       await second.server.handle({ jsonrpc: "2.0", id: 4, method: "session/load", params: { sessionId, cwd: CWD } });
-      expect(second.out).toEqual([
-        { jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { type: "agent_message_chunk", content: "saved" } } },
-        { jsonrpc: "2.0", id: 4, result: {} },
-      ]);
+      expect(second.out[0]).toEqual({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { type: "agent_message_chunk", content: "saved" } } });
+      expect(second.out[1]).toMatchObject({ jsonrpc: "2.0", id: 4 });
+      // session/load must return the picker payload (models + configOptions)
+      // like session/new — Zed rebuilds the model selector from it.
+      expect(second.out[1].result).toMatchObject({ sessionId, models: { availableModels: expect.any(Array) }, configOptions: expect.any(Array) });
       expect(second.server.dialogues.get(sessionId).transcript.getAll()).toHaveLength(1);
   });
 
