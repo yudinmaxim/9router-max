@@ -137,10 +137,49 @@ async function attachAcpWebSocketToServer(server) {
   try {
     const { attachAcpWebSocket } = await import(pathToFileURL(path.join(__dirname, "open-sse", "acp", "websocket.js")).href);
     const { createAcpProviders } = await import(pathToFileURL(path.join(__dirname, "open-sse", "acp", "providers.js")).href);
+    const { getDisabledModels } = await import(pathToFileURL(path.join(__dirname, "src", "lib", "disabledModelsDb.js")).href);
+    const { getProviderAlias } = await import(pathToFileURL(path.join(__dirname, "src", "shared", "constants", "providers.js")).href);
+    const { isProviderDisabled } = await import(pathToFileURL(path.join(__dirname, "src", "lib", "disabledProviders.js")).href);
+    const { getAllAcpAgentSettings } = await import(pathToFileURL(path.join(__dirname, "src", "lib", "acpAgents.js")).href);
     const log = (level, message) => console.error(`[ACP WebSocket] [${level}] ${message}`);
     // Same dispatcher as open-sse/acp/dev-server.js: multi-provider routing,
     // parked children, dialogue persistence, merged history prefixes.
-    const { openChild, modelCatalog, providerIds } = createAcpProviders({ log });
+    const { openChild, modelCatalog: baseModelCatalog, providerIds } = createAcpProviders({ log });
+
+    // Dashboard-side picker rules the shared dispatcher doesn't know about:
+    // provider on/off switch, per-agent enabledModels, global disabled
+    // models, custom display names. Explicit model ids still route — this
+    // only shapes what clients are offered.
+    const modelCatalog = async () => {
+      let settings = {};
+      let disabled = {};
+      try {
+        [settings, disabled] = await Promise.all([getAllAcpAgentSettings(), getDisabledModels()]);
+      } catch (err) {
+        log("warn", `catalog filters unavailable, serving unfiltered: ${err && err.message ? err.message : err}`);
+        return baseModelCatalog();
+      }
+      return baseModelCatalog().flatMap((entry) => {
+        const modelId = entry.modelId || entry.id || "";
+        const sep = modelId.indexOf("/");
+        const providerId = sep > 0 ? modelId.slice(0, sep) : modelId;
+        const rawId = sep > 0 ? modelId.slice(sep + 1) : null;
+        if (isProviderDisabled(providerId)) return [];
+        const agent = settings[providerId];
+        if (rawId == null) {
+          // "(default model)" fallback entry — only when the agent has no
+          // explicit enabledModels narrowing the picker.
+          return agent?.enabledModels?.length ? [] : [entry];
+        }
+        if (Array.isArray(agent?.enabledModels) && agent.enabledModels.length && !agent.enabledModels.includes(rawId)) return [];
+        const hidden = new Set(disabled[getProviderAlias(providerId)] || []);
+        const isHidden = hidden.has(rawId) || hidden.has(rawId.split("/").pop());
+        if (isHidden) return [];
+        const customName = agent?.modelNames?.[rawId];
+        return [customName ? { ...entry, name: customName } : entry];
+      });
+    };
+
     attachAcpWebSocket(server, {
       openChild,
       modelCatalog,
