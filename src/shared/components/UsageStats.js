@@ -228,8 +228,15 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
     Promise.all([
       fetch("/api/providers").then((r) => r.ok ? r.json() : null),
       fetch("/api/provider-nodes").then((r) => r.ok ? r.json() : null),
+      fetch("/api/settings").then((r) => r.ok ? r.json() : null),
     ])
-      .then(([d, nodesData]) => {
+      .then(([d, nodesData, settingsData]) => {
+        // Providers the user switched off on /dashboard/providers live in
+        // settings.disabledProviders, not on the connection row — the
+        // topology must hide them the same way it hides isActive=false.
+        const disabledSet = new Set(
+          Array.isArray(settingsData?.disabledProviders) ? settingsData.disabledProviders : []
+        );
         // Build node name lookup for custom providers
         const nodeNameMap = {};
         for (const node of (nodesData?.nodes || [])) {
@@ -238,6 +245,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
         const seen = new Set();
         const unique = (d?.connections || []).filter((c) => {
           if (c.isActive === false) return false;
+          if (disabledSet.has(c.provider)) return false;
           if (!isLLMProvider(c.provider)) return false;
           if (AI_PROVIDERS[c.provider]?.hidden) return false;
           if (seen.has(c.provider)) return false;
@@ -248,7 +256,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
           nodeName: nodeNameMap[c.provider] || null,
         }));
         const noAuthProviders = Object.values(FREE_PROVIDERS)
-          .filter((p) => p.noAuth && !p.hidden && !seen.has(p.id) && isLLMProvider(p.id))
+          .filter((p) => p.noAuth && !p.hidden && !seen.has(p.id) && !disabledSet.has(p.id) && isLLMProvider(p.id))
           .map((p) => ({ provider: p.id, name: p.name }));
         setProviders([...unique, ...noAuthProviders]);
       })
