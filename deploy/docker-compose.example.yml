@@ -1,0 +1,80 @@
+# docker-compose.yml — 9router + ACP-агенты в VPN-контуре.
+#
+# Это ШАБЛОН: init.sh подставляет реальные пути вместо ${...}.
+# Сервис gluetun здесь НАМЕРЕННО отсутствует — свой VPN-контейнер
+# (gluetun или любой другой, дающий сетевой namespace) пользователь
+# добавляет отдельным файлом, см. README.md.
+#
+# Ключевые моменты:
+#   network_mode: "service:gluetun" — процесс делит netns с VPN-контейнером,
+#     весь egress (9router + все ACP-дети) идёт через VPN на сетевом уровне.
+#   ports: !reset [] — compose не очищает ports пустым списком при merge,
+#     нужен !reset (требуется docker compose >= 2.24).
+#   Порты наружу публикует сам VPN-контейнер (например 127.0.0.1:20130).
+
+services:
+  9router-acp-ui:
+    build:
+      context: ${REPO_DIR}
+      dockerfile: ${REPO_DIR}/Dockerfile
+      args:
+        NODE_IMAGE: node:22-bookworm-slim
+        APP_VERSION: vpn-agents
+    image: vpn-9router-acp-ui:latest
+    container_name: 9router-acp-ui
+    security_opt:
+      - seccomp=unconfined
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
+    ports: !reset []
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "20130"
+      HOSTNAME: "0.0.0.0"
+      DATA_DIR: /app/data
+      HOME: /home/node
+      INITIAL_PASSWORD: ${INITIAL_PASSWORD}
+      # custom-server.js подключает ACP WebSocket (/api/acp/ws) через
+      # dynamic import src/lib — alias-loader резолвит "@/..." алиасы.
+      NODE_OPTIONS: "--experimental-loader /app/alias-loader.mjs"
+      ACP_PROVIDERS: ${ACP_PROVIDERS}
+      ACP_MODEL_ALLOW: ${ACP_MODEL_ALLOW}
+      # PATH: домашние бинари агентов монтируются по тем же путям, что на
+      # хосте, поэтому host-пути работают и внутри контейнера.
+      PATH: /app/data/npm-global/bin:/usr/local/bin:/usr/bin:/bin:${BIN_PATHS}
+      PYTHONUSERBASE: /app/data/pylocal
+      PIP_USER: "1"
+      PIP_BREAK_SYSTEM_PACKAGES: "1"
+      NPM_CONFIG_PREFIX: /app/data/npm-global
+      NINEROUTER_TRUSTED_PEERS: "172.20.0.1"
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: "*"
+    volumes:
+      - 9router-acp-data:/app/data
+      # --- рабочие каталоги проектов (агенты видят ФС хоста напрямую) ---
+      - ${PROJECTS_DIR}:${PROJECTS_DIR}
+      # --- каталоги агентов: init.sh добавляет только существующие ---
+      # codex:
+      #   - ~/.codex:/home/node/.codex
+      #   - ~/.cache/codex-runtimes:~/.cache/codex-runtimes:ro
+      # opencode:
+      #   - ~/.config/opencode:/home/node/.config/opencode
+      #   - ~/.local/share/opencode:/home/node/.local/share/opencode
+      #   - ~/.local/state/opencode:/home/node/.local/state/opencode
+      #   - ~/.cache/opencode:/home/node/.cache/opencode
+      # devin-cli (state отделён от хостового, бинарь ro, credentials rw):
+      #   - <state-dir>:/home/node/.local/share/devin
+      #   - ~/.local/share/devin/credentials.toml:/home/node/.local/share/devin/credentials.toml
+      #   - ~/.local/share/devin/cli/_versions:/home/node/.local/share/devin/cli/_versions:ro
+      #   - ~/.config/devin:/home/node/.config/devin
+      # бинари (ro):
+      #   - ~/.local/bin:~/.local/bin:ro
+      #   - ~/.opencode/bin:~/.opencode/bin:ro
+      #   - ~/.nvm:~/.nvm:ro
+
+volumes:
+  9router-acp-data:
+    name: 9router-acp-data
