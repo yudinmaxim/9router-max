@@ -725,32 +725,23 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
       if (id !== undefined && id !== null) fail(id, INVALID_PARAMS, "session not found");
       return;
     }
-    let requestId = null;
-    let unsubscribe = null;
-    const result = new Promise((resolve) => {
-      unsubscribe = dialogue.child.onMessage((msg) => {
-        if (msg.id !== requestId) return;
-        unsubscribe?.();
-        resolve(msg);
-      });
+    // session/cancel is a *notification* in ACP: agents register it on the
+    // notification path only, so sending it as a request earns -32601
+    // "method not found" and the turn keeps running to completion.
+    const sent = dialogue.child.sendRpcRaw({
+      jsonrpc: "2.0",
+      method: "session/cancel",
+      params: { sessionId: dialogue.childSessionId },
     });
-    requestId = dialogue.child.sendRpc("session/cancel", { sessionId: dialogue.childSessionId });
-    log("info", `session/cancel ${sessionId} → child ${dialogue.childSessionId} request=${requestId ?? "failed"}`);
-    if (!requestId) {
-      unsubscribe?.();
-      if (id !== undefined && id !== null) return fail(id, INTERNAL_ERROR, "failed to send session/cancel to child");
+    log("info", `session/cancel ${sessionId} → child ${dialogue.childSessionId} ${sent ? "sent" : "FAILED"}`);
+    if (!sent) {
+      if (id !== undefined && id !== null) fail(id, INTERNAL_ERROR, "failed to send session/cancel to child");
       return;
     }
-    if (id === undefined || id === null) {
-      unsubscribe?.();
-      dialogue.promptInFlight = false;
-      return;
-    }
-    const response = await result;
-    log("info", `session/cancel child response ${sessionId} request=${requestId}`);
     dialogue.promptInFlight = false;
-    if (response.error) return fail(id, response.error.code || INTERNAL_ERROR, response.error.message || "child rejected session/cancel");
-    reply(id, response.result || {});
+    // A notification has no response to wait for; if the client sent the
+    // non-standard request form anyway, acknowledge immediately.
+    if (id !== undefined && id !== null) reply(id, {});
   }
 
   async function onSessionResume(id, params) {

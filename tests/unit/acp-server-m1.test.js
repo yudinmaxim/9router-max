@@ -277,17 +277,14 @@ describe("ACP server M1 — transport hygiene", () => {
     expect(out[0]).toMatchObject({ id: 7, error: { code: -32601 } });
   });
 
-  it("forwards session/cancel notifications to the child without replying", async () => {
-    let listener = null;
+  it("forwards session/cancel to the child as a notification without replying", async () => {
+    // ACP spec: session/cancel is a notification — agents answer -32601 to
+    // the request form, so the child must receive a raw frame with no id.
     const sent = [];
     const child = fakeChild({
-      sendRpc: (method, params) => {
-        sent.push({ method, params });
-        return 7;
-      },
-      onMessage: (next) => {
-        listener = next;
-        return () => { listener = null; };
+      sendRpcRaw: (frame) => {
+        sent.push(frame);
+        return true;
       },
     });
     const { server, out } = harness({ openChild: async () => child });
@@ -295,9 +292,22 @@ describe("ACP server M1 — transport hygiene", () => {
     await server.handle({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: CWD } });
     const sessionId = out[1].result.sessionId;
     await server.handle({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
-    expect(sent.at(-1)).toMatchObject({ method: "session/cancel", params: { sessionId: child.sessionId } });
+    expect(sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "session/cancel",
+      params: { sessionId: child.sessionId },
+    });
     expect(out).toHaveLength(2);
-    expect(listener).toBeNull();
+  });
+
+  it("acknowledges a request-form session/cancel immediately", async () => {
+    const child = fakeChild({ sendRpcRaw: () => true });
+    const { server, out } = harness({ openChild: async () => child });
+    await init(server);
+    await server.handle({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: CWD } });
+    const sessionId = out[1].result.sessionId;
+    await server.handle({ jsonrpc: "2.0", id: 9, method: "session/cancel", params: { sessionId } });
+    expect(out.at(-1)).toMatchObject({ id: 9, result: {} });
   });
 
   it("survives a handler that throws, still replying exactly once", async () => {
