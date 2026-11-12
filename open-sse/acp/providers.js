@@ -9,7 +9,8 @@
  */
 import { getExecutor } from "../executors/index.js";
 import { createChildFactory } from "./factory.js";
-import { readCachedCatalog } from "../executors/lib/acpCatalog.js";
+import { readCachedCatalog, getAcpCatalog, CATALOG_TTL_MS } from "../executors/lib/acpCatalog.js";
+import { resolveInstalledBin } from "../executors/lib/acpStatus.js";
 
 export const DEFAULT_ACP_PROVIDERS = "codex-acp,opencode-acp";
 
@@ -42,15 +43,34 @@ export function providerIdsFromEnv(env = process.env) {
 
 export function createAcpProviders({ providerIds = providerIdsFromEnv(), log = () => {} } = {}) {
   const factories = new Map();
+  const specs = new Map();
   for (const providerId of providerIds) {
     const executor = getExecutor(providerId);
     if (!executor?.acp) {
       log("warn", `skip ${providerId}: executor has no ACP spec`);
       continue;
     }
+    specs.set(providerId, executor.acp);
     factories.set(providerId, createChildFactory({ providerId, spec: executor.acp, log }));
   }
   if (!factories.size) throw new Error("no usable ACP providers configured");
+
+  // Stale-while-revalidate: the picker always serves the on-disk cache
+  // (even ancient — a missing catalog is worse than an outdated one), and
+  // entries older than CATALOG_TTL_MS trigger a background probe that
+  // rewrites the cache for the next read. One probe per provider at a time.
+  const refreshing = new Set();
+  function maybeRefreshCatalog(providerId) {
+    if (refreshing.has(providerId)) return;
+    const spec = specs.get(providerId);
+    const bin = spec && resolveInstalledBin(spec);
+    if (!bin) return;
+    refreshing.add(providerId);
+    const extraEnv = typeof spec.env === "function" ? spec.env() : spec.env || {};
+    getAcpCatalog(providerId, spec, bin, extraEnv)
+      .catch((err) => log("warn", `catalog refresh ${providerId} failed: ${err?.message || err}`))
+      .finally(() => refreshing.delete(providerId));
+  }
 
   const defaultProvider = providerIds.find((id) => factories.has(id));
 
@@ -81,6 +101,9 @@ export function createAcpProviders({ providerIds = providerIdsFromEnv(), log = (
     const out = [];
     for (const providerId of factories.keys()) {
       const cached = readCachedCatalog(providerId);
+      if (!cached || Date.now() - (cached.fetchedAt || 0) > CATALOG_TTL_MS) {
+        maybeRefreshCatalog(providerId);
+      }
       const models = cached?.models || [];
       const before = out.length;
       if (models.length) {

@@ -1,3 +1,24 @@
+# Unreleased — acp-experiments
+
+Multi-provider ACP gateway: one external ACP session fronts several agent
+CLIs, with parked children, persisted dialogues and dashboard-aware model
+pickers.
+
+## Features
+- **ACP gateway**: `open-sse/acp/` — a provider-agnostic ACP server (initialize / session/new / session/load / session/prompt / set_config_option) that dispatches `provider/model` selectors across `codex-acp`, `opencode-acp` and other ACP executors; served over WebSocket at `/api/acp/ws` from `custom-server.js` and reachable from Zed via the stdio↔WS bridge in `open-sse/acp/cli.js` (`ACP_REMOTE_WS`)
+- **Child parking**: live provider children are cached per dialogue — switching providers preserves each child's agent-side context, and switching back reuses the parked child with a model re-pin instead of a respawn
+- **Cross-provider context**: history a child has not seen is merged into the next real prompt as a `[Context update]` prefix (awareness watermarks per parked child) — provider switches cost zero extra model turns
+- **Persistence**: dialogues persist to SQLite (`acpDialogues`) with transcript, child-session ids and history; `session/load` resumes them, qualifies stored child model ids for the picker and seeds lazy children
+- **Model picker**: slash-qualified `provider/model` catalog assembled from each agent's probed `configOptions`, filtered by `ACP_MODEL_ALLOW` globs and by dashboard rules (provider on/off, per-agent `enabledModels`, global disabled models, custom names); stale catalogs (>6h) are served while a background probe refreshes them
+- **Usage accounting**: ACP `result.usage` feeds token tracking; cross-process activity markers keep the providers diagram live
+- **Docker**: unified image runs dashboard + `/v1` API + ACP WebSocket in one process; designed to share a network namespace with gluetun so all agent egress is VPN-routed with a fail-closed kill switch
+- **CORS**: `OPTIONS` preflights pass the remote-API auth gate on public LLM routes so browser-plugin clients (e.g. OnlyOffice) can negotiate
+
+## Fixes
+- Child spawn failures (ENOENT, early exit) reject the open-child promise instead of crashing the server
+- `session/load` returns the full picker payload (models + configOptions) so loaded threads keep a selectable model
+- `session/set_config_option` on a lazily-loaded session records the choice for the next prompt instead of erroring
+
 # v0.5.99-max-fork (2026-10-09)
 
 Fork release. Changes on top of upstream v0.5.99:

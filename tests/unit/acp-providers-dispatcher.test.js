@@ -5,10 +5,12 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { executorCalls, factoryCalls, catalogs } = vi.hoisted(() => ({
+const { executorCalls, factoryCalls, catalogs, catalogProbes, catalogProbeGate } = vi.hoisted(() => ({
   executorCalls: [],
   factoryCalls: [],
   catalogs: {},
+  catalogProbes: [],
+  catalogProbeGate: { p: null },
 }));
 
 vi.mock("../../open-sse/executors/index.js", () => ({
@@ -28,7 +30,17 @@ vi.mock("../../open-sse/acp/factory.js", () => ({
 }));
 
 vi.mock("../../open-sse/executors/lib/acpCatalog.js", () => ({
+  CATALOG_TTL_MS: 6 * 60 * 60 * 1000,
   readCachedCatalog: (providerId) => catalogs[providerId] || null,
+  getAcpCatalog: async (providerId) => {
+    catalogProbes.push(providerId);
+    if (catalogProbeGate.p) await catalogProbeGate.p;
+    return { models: [], options: [], source: "probe" };
+  },
+}));
+
+vi.mock("../../open-sse/executors/lib/acpStatus.js", () => ({
+  resolveInstalledBin: () => "/fake/bin",
 }));
 
 const { createAcpProviders, providerIdsFromEnv } = await import("../../open-sse/acp/providers.js");
@@ -36,6 +48,8 @@ const { createAcpProviders, providerIdsFromEnv } = await import("../../open-sse/
 beforeEach(() => {
   executorCalls.length = 0;
   factoryCalls.length = 0;
+  catalogProbes.length = 0;
+  catalogProbeGate.p = null;
   for (const k of Object.keys(catalogs)) delete catalogs[k];
 });
 
@@ -114,5 +128,35 @@ describe("modelCatalog", () => {
   it("offers a provider default entry when its catalog is empty", () => {
     const { modelCatalog } = createAcpProviders({ providerIds: ["codex-acp"], log: () => {} });
     expect(modelCatalog()).toEqual([{ modelId: "codex-acp", name: "codex-acp (default model)" }]);
+  });
+
+  it("serves a stale cache but kicks off a background refresh probe", async () => {
+    catalogs["codex-acp"] = {
+      fetchedAt: Date.now() - 7 * 60 * 60 * 1000, // older than CATALOG_TTL_MS
+      models: [{ id: "gpt-6-luna", name: "Luna" }],
+    };
+    // Hold probes open so the in-flight dedupe window is observable.
+    let release;
+    catalogProbeGate.p = new Promise((r) => { release = r; });
+    const { modelCatalog } = createAcpProviders({ providerIds: ["codex-acp"], log: () => {} });
+    // Stale entries are still served — the picker never goes empty.
+    expect(modelCatalog().map((e) => e.modelId)).toEqual(["codex-acp/gpt-6-luna"]);
+    await vi.waitFor(() => expect(catalogProbes).toEqual(["codex-acp"]));
+    // A second read while the probe is in flight must not double-spawn.
+    modelCatalog();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(catalogProbes).toHaveLength(1);
+    release();
+  });
+
+  it("does not probe when the cache is fresh", async () => {
+    catalogs["codex-acp"] = {
+      fetchedAt: Date.now(),
+      models: [{ id: "gpt-6-luna", name: "Luna" }],
+    };
+    const { modelCatalog } = createAcpProviders({ providerIds: ["codex-acp"], log: () => {} });
+    modelCatalog();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(catalogProbes).toHaveLength(0);
   });
 });
