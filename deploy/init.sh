@@ -140,6 +140,11 @@ services:
       - gluetun
     ports: !reset []
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     env_file: .env
     environment:
       NODE_ENV: production

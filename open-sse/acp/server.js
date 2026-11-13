@@ -169,6 +169,28 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     });
   }
 
+  // persist() serializes the whole transcript to SQLite — doing that on
+  // every session/update is O(n²) under token streaming and was the heap
+  // blow-up. Updates mark the dialogue dirty; a trailing timer flushes at
+  // most once per interval, and prompt completion always persists inline.
+  const PERSIST_MIN_INTERVAL_MS = 2000;
+  function schedulePersist(sessionId, dialogue) {
+    if (dialogue.persistTimer) return;
+    dialogue.persistTimer = setTimeout(() => {
+      dialogue.persistTimer = null;
+      if (!dialogues.has(sessionId)) return;
+      persist(sessionId, dialogue).catch((err) => log("error", `dialogue persistence failed: ${err?.message || err}`));
+    }, PERSIST_MIN_INTERVAL_MS);
+    dialogue.persistTimer.unref?.();
+  }
+
+  function cancelScheduledPersist(dialogue) {
+    if (dialogue.persistTimer) {
+      clearTimeout(dialogue.persistTimer);
+      dialogue.persistTimer = null;
+    }
+  }
+
   async function loadStored(sessionId) {
     return getAcpDialogueById(sessionId);
   }
@@ -176,6 +198,31 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
 
   function sendNotification(method, params) {
     send({ jsonrpc: "2.0", method, params });
+  }
+
+  // Debug logging runs unconditionally to stderr, so it must not stringify
+  // whole session/update payloads: terminal_output_delta chunks are huge
+  // and the stringify itself is the allocation spike under load.
+  function slimUpdateForLog(update) {
+    if (!update || typeof update !== "object") return update;
+    const out = { ...update };
+    if ("content" in out) out.content = "[omitted]";
+    if ("rawInput" in out) out.rawInput = "[omitted]";
+    if (out._meta && typeof out._meta === "object" && out._meta.terminal_output_delta) {
+      out._meta = { ...out._meta, terminal_output_delta: "[truncated]" };
+    }
+    return out;
+  }
+
+  function logPayload(msg) {
+    if (msg?.method === "session/update") {
+      const update = msg.params?.update || msg.params;
+      return JSON.stringify({
+        method: msg.method,
+        params: { sessionId: msg.params?.sessionId, update: slimUpdateForLog(update) },
+      });
+    }
+    return JSON.stringify(msg).slice(0, 2000);
   }
 
   const send = (obj) => write(obj);
@@ -461,7 +508,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
     let unsubscribePrompt = null;
     const onceResult = new Promise((resolve) => {
       const handler = (msg) => {
-        log("debug", `child message provider=${dialogue.provider} ${JSON.stringify(msg).slice(0, 2000)}`);
+        log("debug", `child message provider=${dialogue.provider} ${logPayload(msg)}`);
         if (msg.method && msg.id !== undefined && msg.id !== null) {
           childRequests.set(msg.id, dialogue);
           const paramsOut = { ...(msg.params || {}), sessionId };
@@ -476,7 +523,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
         }
         if (msg.method === "session/update") {
           const update = msg.params?.update || msg.params;
-          log("debug", `child session/update provider=${dialogue.provider} update=${JSON.stringify(update).slice(0, 1000)}`);
+          log("debug", `child session/update provider=${dialogue.provider} update=${JSON.stringify(slimUpdateForLog(update)).slice(0, 1000)}`);
           if (update) {
             if (update.sessionUpdate === "agent_message_chunk" && typeof update.content?.text === "string") {
               assistantText += update.content.text;
@@ -493,7 +540,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
                 : update.content;
             const normalized = content && content !== update.content ? { ...update, content } : update;
             transcript.add(normalized);
-            persist(sessionId, dialogue).catch((err) => log("error", `dialogue persistence failed: ${err?.message || err}`));
+            schedulePersist(sessionId, dialogue);
             sendNotification("session/update", { sessionId, update: normalized });
           }
         } else if (msg.id === promptResult) {
@@ -524,6 +571,7 @@ export function createAcpServer({ write, openChild, modelCatalog, modelOptions, 
       // The child saw the merged prefix plus this whole exchange natively —
       // mark its awareness so the next activation only sends what is new.
       if (activeEntry && stopReason !== "cancelled") activeEntry.awareness = dialogue.history.length;
+      cancelScheduledPersist(dialogue);
       persist(sessionId, dialogue).catch((err) => log("error", `dialogue persistence failed: ${err?.message || err}`));
       reply(id, { stopReason });
     } finally {

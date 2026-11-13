@@ -29,6 +29,13 @@ services:
       - gluetun
     ports: !reset []
     restart: unless-stopped
+    # ACP debug-лог пишет каждый session/update в stderr — без лимита
+    # json-file log растёт бесконечно и съедает диск.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     environment:
       NODE_ENV: production
       PORT: "20130"
