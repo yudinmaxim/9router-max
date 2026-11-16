@@ -81,6 +81,22 @@ Zed/OnlyOffice ──► 127.0.0.1:20130 ──► 9router-acp-ui ──(netns g
 - Дашборд `/dashboard` позволяет включать/выключать провайдеров и
   управлять моделями; выключенные не показываются в топологии Usage
 
+## Исключения из VPN (direct egress)
+
+Весь трафик контейнера идёт через VPN — кроме подсетей, явно разрешённых
+в gluetun через `FIREWALL_OUTBOUND_SUBNETS` (в вашем vpn-файле):
+
+```yaml
+environment:
+  FIREWALL_OUTBOUND_SUBNETS: "192.188.189.145/32"   # gitea.mipt.ru
+```
+
+Это чистый сетевой уровень (iptables/policy routing), не proxy —
+подходящие CIDR'ы идут через eth0 напрямую, остальное через tun0.
+Используйте для git-серверов/API, недоступных или медленных через VPN.
+IP берите из DNS (`getent hosts host`) и помните: /32 привязан к
+конкретному IP — при смене DNS-записи обновите список.
+
 ## Если агент не виден в контейнере
 
 1. `docker exec 9router-acp-ui sh -c 'which codex; codex --version'` —
