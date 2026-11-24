@@ -24,6 +24,7 @@
       "description": "Playwright E2E tests on the host (real Chrome/Xvfb if needed)",
       "argv": ["npx", "playwright", "test"],
       "timeoutMs": 900000,
+      "argPattern": "^(?!.*--config\\b)(?!.*--project\\b)[A-Za-z0-9_./=@-]+$",
       "env": {
         "CI": "1"
       }
@@ -32,6 +33,7 @@
       "description": "Headed Playwright tests through host Xvfb",
       "argv": ["xvfb-run", "-a", "npx", "playwright", "test", "--headed"],
       "timeoutMs": 900000,
+      "argPattern": "^(?!.*--config\\b)(?!.*--project\\b)[A-Za-z0-9_./=@-]+$",
       "env": {
         "CI": "1"
       }
