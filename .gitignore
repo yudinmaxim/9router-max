@@ -116,3 +116,7 @@ tests/node_modules
 !docs/ACP-SERVER-SPEC.md
 !docs/ACP-HANDOFF.md
 !docs/ACP-JOURNAL.md
+
+# Python bytecode
+__pycache__/
+*.pyc

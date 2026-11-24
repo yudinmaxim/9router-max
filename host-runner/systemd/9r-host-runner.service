@@ -1,0 +1,19 @@
+[Unit]
+Description=9router host command runner (whitelisted MCP bridge)
+After=network.target
+ConditionPathExists=%h/.9r-host-runner
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/personal-projects/9router-max-exp
+ExecStart=/usr/bin/python3 %h/Projects/personal-projects/9router-max-exp/host-runner/daemon.py --config %h/.9r-host-runner/tools.json --auth %h/.9r-host-runner/auth.json --in %h/.9r-host-runner/in --out %h/.9r-host-runner/out
+Restart=on-failure
+RestartSec=2
+# Keep the hardening light: the daemon must be able to write test artifacts and
+# vendor caches inside the mounted projects. Safety comes from the argv
+# whitelist, realpath cwd check, no shell, no agent-supplied env, and auditing.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

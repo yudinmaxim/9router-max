@@ -1,0 +1,75 @@
+{
+  "allowedRoots": ["/home/maxim/Projects"],
+  "envAllowlist": [
+    "PATH",
+    "HOME",
+    "DISPLAY",
+    "XAUTHORITY",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "PLAYWRIGHT_BROWSERS_PATH",
+    "COMPOSER_HOME"
+  ],
+  "maxConcurrent": 1,
+  "maxPending": 50,
+  "maxOutputBytes": 200000,
+  "maxTailBytes": 16000,
+  "defaultTimeoutMs": 900000,
+  "maxTimeoutMs": 3600000,
+  "pollMs": 250,
+  "auditFile": "/home/maxim/.9r-host-runner/audit.jsonl",
+  "tools": {
+    "e2e_playwright": {
+      "description": "Playwright E2E tests on the host (real Chrome/Xvfb if needed)",
+      "argv": ["npx", "playwright", "test"],
+      "timeoutMs": 900000,
+      "env": {
+        "CI": "1"
+      }
+    },
+    "e2e_playwright_ui": {
+      "description": "Headed Playwright tests through host Xvfb",
+      "argv": ["xvfb-run", "-a", "npx", "playwright", "test", "--headed"],
+      "timeoutMs": 900000,
+      "env": {
+        "CI": "1"
+      }
+    },
+    "php_test": {
+      "description": "PHP/Laravel test suite",
+      "argv": ["php", "artisan", "test"],
+      "timeoutMs": 600000
+    },
+    "php_lint": {
+      "description": "PHP syntax check",
+      "argv": ["php", "-l"],
+      "timeoutMs": 30000
+    },
+    "phpstan": {
+      "description": "PHPStan static analysis",
+      "argv": ["vendor/bin/phpstan", "analyse"],
+      "timeoutMs": 600000
+    },
+    "composer_test": {
+      "description": "Composer test script",
+      "argv": ["composer", "test"],
+      "timeoutMs": 600000
+    },
+    "e2e_real": {
+      "description": "science-to-regions real E2E: seeds fixtures, runs Playwright with account/playwright.real.config.js, cleans up",
+      "argv": [
+        "/home/maxim/.nvm/versions/node/v24.19.0/bin/node",
+        "/home/maxim/Projects/MIPT/science-to-regions/scripts/e2e-real.mjs"
+      ],
+      "allowedCwd": ["/home/maxim/Projects/MIPT/science-to-regions"],
+      "allowArgs": false,
+      "timeoutMs": 300000,
+      "maxTimeoutMs": 1800000,
+      "env": {
+        "E2E_HOST_GATEWAY": "172.20.0.1",
+        "PLAYWRIGHT_BROWSERS_PATH": "/var/lib/docker/volumes/9router-acp-data/_data/ms-playwright"
+      }
+    }
+  }
+}

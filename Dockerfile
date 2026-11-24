@@ -61,6 +61,9 @@ COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/custom-server.js ./custom-server.js
 COPY --from=builder /app/open-sse ./open-sse
+# Optional host-command runner: the in-container MCP plugin writes queue files;
+# the host daemon (outside the image) performs whitelisted commands.
+COPY --from=builder /app/host-runner ./host-runner
 # Next file tracing can omit sibling files; MITM runs server.js as a separate process.
 COPY --from=builder /app/src/mitm ./src/mitm
 # ACP WebSocket bridge and custom-server import src/lib (DB repos, agent

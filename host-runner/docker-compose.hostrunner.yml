@@ -1,0 +1,52 @@
+# Overlay for the experimental 9router ACP container.
+#
+# The service name MUST match the one in /home/maxim/vpn/docker-compose.yml
+# ("9router-acp-ui"); the older name "9router-acp" created a second unwanted
+# container instead of patching the existing one.
+#
+# Usage (keep the existing Compose project name!):
+#   cd /home/maxim/vpn
+#   docker compose -p vpn \
+#     -f docker-compose.yml \
+#     -f docker-compose.vpn.yml \
+#     -f /home/maxim/Projects/personal-projects/9router-max-exp/host-runner/docker-compose.hostrunner.yml \
+#     up -d 9router-acp-ui
+#
+# The same overlay works with the alternative channel:
+#   docker compose -p vpn \
+#     -f docker-compose.yml \
+#     -f docker-compose.vpn-hiddify.yml \
+#     -f /home/maxim/Projects/personal-projects/9router-max-exp/host-runner/docker-compose.hostrunner.yml \
+#     up -d 9router-acp-ui
+#
+# The operator still runs host-runner/daemon.py on the host (systemd --user);
+# this file only gives the in-container MCP plugin access to the two queue
+# directories and switches the optional stdio MCP server on.
+services:
+  9router-acp-ui:
+    # Keep the source build here as well: plugin.mjs lives in the repo, so a
+    # prebuilt image without it would make the runner invisible to agents.
+    # The base compose already has the same build block; this is idempotent.
+    build:
+      context: /home/maxim/Projects/personal-projects/9router-max-exp
+      dockerfile: /home/maxim/Projects/personal-projects/9router-max-exp/Dockerfile
+      args:
+        NODE_IMAGE: node:22-bookworm-slim
+        APP_VERSION: experimental-vpn
+    environment:
+      NINEROUTER_HOST_RUNNER: "1"
+      NINEROUTER_HOST_RUNNER_PLUGIN: /app/host-runner/plugin.mjs
+      HOST_RUNNER_IN_DIR: /var/lib/9r-runner/in
+      HOST_RUNNER_OUT_DIR: /var/lib/9r-runner/out
+    volumes:
+      # Same queue, two target paths. `/var/lib/9r-runner/*` is what the
+      # router's own ACP plugin (NINEROUTER_HOST_RUNNER) is told to use; the
+      # host-identical copy exists because ~/.codex/config.toml is shared with
+      # the host, and its [mcp_servers.hostrunner] entry must resolve the same
+      # absolute paths whether codex runs on the host or inside this container.
+      - /home/maxim/.9r-host-runner/in:/var/lib/9r-runner/in
+      - /home/maxim/.9r-host-runner/out:/var/lib/9r-runner/out:ro
+      - /home/maxim/.9r-host-runner/in:/home/maxim/.9r-host-runner/in
+      - /home/maxim/.9r-host-runner/out:/home/maxim/.9r-host-runner/out:ro
+      # NOTE: no extra mount for tools.json is needed — the base compose already
+      # bind-mounts /home/maxim/Projects rw at the same path the daemon reads.

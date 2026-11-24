@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""Provision and inspect the host-side key material for the host-runner whitelist.
+
+The whitelist lives at ~/.9r-host-runner/tools.json — outside every container
+mount, because agents share the container with the dashboard as the same uid and
+would otherwise be able to rewrite it directly. Edits from the web UI therefore
+arrive as messages that must be authenticated with a key derived from the
+dashboard password, and that key exists only in ~/.9r-host-runner/auth.json.
+
+So this script is the one step that cannot be done from the dashboard:
+
+    ./hostrunner-ctl set-password      # once, and after every password change
+
+It reads the password from the terminal, or from stdin when stdin is not a
+terminal — never from argv, where it would land in shell history and `ps`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import getpass
+import importlib.util
+import json
+import os
+import secrets
+import sys
+from pathlib import Path
+
+RUNNER_DIR = Path.home() / ".9r-host-runner"
+DEFAULT_CONFIG = RUNNER_DIR / "tools.json"
+DEFAULT_AUTH = RUNNER_DIR / "auth.json"
+TEMPLATE_CONFIG = Path(__file__).with_name("tools.json")
+
+
+def load_daemon():
+    """Reuse the daemon's own KDF and validation so the two cannot drift apart."""
+    spec = importlib.util.spec_from_file_location("hostrunner_daemon", Path(__file__).with_name("daemon.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def read_password(confirm: bool) -> str:
+    if not sys.stdin.isatty():
+        password = sys.stdin.readline().rstrip("\n")
+        if not password:
+            raise SystemExit("[hostrunner-ctl] no password on stdin")
+        return password
+    password = getpass.getpass("Dashboard password: ")
+    if not password:
+        raise SystemExit("[hostrunner-ctl] empty password")
+    if confirm and getpass.getpass("Repeat: ") != password:
+        raise SystemExit("[hostrunner-ctl] passwords do not match")
+    return password
+
+
+def write_private(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def cmd_init(_args: argparse.Namespace) -> int:
+    for name in ("in", "out"):
+        directory = RUNNER_DIR / name
+        directory.mkdir(parents=True, exist_ok=True)
+        os.chmod(directory, 0o700)
+
+    if not DEFAULT_CONFIG.exists():
+        if not TEMPLATE_CONFIG.exists():
+            raise SystemExit(f"[hostrunner-ctl] no template at {TEMPLATE_CONFIG}")
+        template = json.loads(TEMPLATE_CONFIG.read_text(encoding="utf-8"))
+        # Fail early on a broken template rather than at daemon startup.
+        daemon = load_daemon()
+        daemon.parse_config(template)
+        write_private(DEFAULT_CONFIG, template)
+        print(f"[hostrunner-ctl] created {DEFAULT_CONFIG} from {TEMPLATE_CONFIG}")
+    else:
+        print(f"[hostrunner-ctl] {DEFAULT_CONFIG} already exists")
+
+    print(f"[hostrunner-ctl] queue ready at {RUNNER_DIR}/{{in,out}}")
+    if not DEFAULT_AUTH.exists():
+        print("[hostrunner-ctl] next: run `hostrunner-ctl set-password`")
+    return 0
+
+
+def cmd_set_password(_args: argparse.Namespace) -> int:
+    daemon = load_daemon()
+    # Always from the terminal or stdin: a --password flag would land in shell
+    # history and `ps`, which is the whole reason this script exists.
+    password = read_password(confirm=True)
+    if not password:
+        raise SystemExit("[hostrunner-ctl] empty password")
+
+    salt = secrets.token_hex(16)
+    key = daemon.derive_key(password, salt)
+    write_private(DEFAULT_AUTH, {"salt": salt, "key": key.hex(), "iterations": daemon.PBKDF2_ITERATIONS})
+
+    # Never echo it back; the point of this file is that nobody needs to read it.
+    print(f"[hostrunner-ctl] wrote {DEFAULT_AUTH} (mode 600)")
+    print("[hostrunner-ctl] dashboard saves are enabled from now on.")
+    if not DEFAULT_CONFIG.exists():
+        print(f"[hostrunner-ctl] note: {DEFAULT_CONFIG} is missing — run `hostrunner-ctl init`")
+    return 0
+
+
+def cmd_status(_args: argparse.Namespace) -> int:
+    daemon = load_daemon()
+    print(f"runner dir : {RUNNER_DIR}{'  (missing)' if not RUNNER_DIR.is_dir() else ''}")
+    for name in ("in", "out"):
+        d = RUNNER_DIR / name
+        print(f"  {name:<9}: {'ok' if d.is_dir() else 'MISSING'}")
+
+    if DEFAULT_CONFIG.exists():
+        try:
+            config = daemon.load_config(DEFAULT_CONFIG)
+            print(f"config     : {DEFAULT_CONFIG}")
+            print(f"  tools    : {', '.join(config['tools'])}")
+            print(f"  roots    : {', '.join(config['allowedRoots'])}")
+        except SystemExit as exc:
+            print(f"config     : {DEFAULT_CONFIG} — INVALID: {exc}")
+    else:
+        print(f"config     : MISSING ({DEFAULT_CONFIG}) — run `hostrunner-ctl init`")
+
+    auth = daemon.load_auth(DEFAULT_AUTH)
+    if auth is None:
+        print(f"auth       : MISSING ({DEFAULT_AUTH}) — run `hostrunner-ctl set-password`")
+        print("  edits from the dashboard are disabled until then")
+    else:
+        print(f"auth       : ok (salt {auth['salt'][:8]}…, key {len(auth['key'])} bytes)")
+        print(f"  derived with PBKDF2-HMAC-SHA256 × {daemon.PBKDF2_ITERATIONS}")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="9router host-runner host-side control")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("init", help="create the queue directories and the whitelist").set_defaults(func=cmd_init)
+
+    p = sub.add_parser("set-password", help="create/replace the key the dashboard signs edits with")
+    p.set_defaults(func=cmd_set_password)
+
+    sub.add_parser("status", help="show what is provisioned").set_defaults(func=cmd_status)
+
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

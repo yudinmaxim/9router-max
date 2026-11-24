@@ -12,6 +12,8 @@
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
 
 process.env.DATA_DIR = "/tmp/9r-mcp-targets-test";
 process.env.PORT = "21999";
@@ -34,6 +36,10 @@ beforeAll(async () => {
 beforeEach(async () => {
   const db = await getAdapter();
   db.run("DELETE FROM mcpServers");
+  delete process.env.NINEROUTER_HOST_RUNNER;
+  delete process.env.NINEROUTER_HOST_RUNNER_PLUGIN;
+  delete process.env.HOST_RUNNER_IN_DIR;
+  delete process.env.HOST_RUNNER_OUT_DIR;
 });
 
 /** Mirrors the union cursor-agent enforces, so a bad shape fails the test. */
@@ -142,6 +148,38 @@ async function runExecute({ targets, child: injected } = {}) {
 describe("buildMcpProxyTargets", () => {
   it("returns an empty list when nothing is registered", async () => {
     expect(await buildMcpProxyTargets()).toEqual([]);
+  });
+
+  it("adds the opt-in host runner as a stdio target", async () => {
+    const pluginPath = "/tmp/9r-mcp-targets-test/host-runner-plugin.mjs";
+    fs.mkdirSync(path.dirname(pluginPath), { recursive: true });
+    fs.writeFileSync(pluginPath, "");
+    process.env.NINEROUTER_HOST_RUNNER = "1";
+    process.env.NINEROUTER_HOST_RUNNER_PLUGIN = pluginPath;
+    process.env.HOST_RUNNER_IN_DIR = "/queue/in";
+    process.env.HOST_RUNNER_OUT_DIR = "/queue/out";
+
+    const targets = await buildMcpProxyTargets();
+    expect(targets).toHaveLength(1);
+    const [target] = targets;
+    expect(target.name).toBe("hostrunner");
+    expect(target.command).toBe(process.execPath);
+    expect(target.args).toEqual([pluginPath]);
+    expect(target.env).toEqual([
+      { name: "HOST_RUNNER_IN_DIR", value: "/queue/in" },
+      { name: "HOST_RUNNER_OUT_DIR", value: "/queue/out" },
+    ]);
+    // No `type`, env as an array — the shape the live ACP union accepts.
+    expect(validateServers(targets)).toBeNull();
+  });
+
+  it("keeps registry entries and appends the host runner", async () => {
+    await repo.createMcpServer({ name: "Jira", url: "https://jira.example/mcp" });
+    process.env.NINEROUTER_HOST_RUNNER = "true";
+    process.env.NINEROUTER_HOST_RUNNER_PLUGIN = process.execPath;
+
+    const names = (await buildMcpProxyTargets()).map((t) => t.name);
+    expect(names).toEqual(["Jira", "hostrunner"]);
   });
 
   it("describes each enabled server as an http entry at the proxy", async () => {
