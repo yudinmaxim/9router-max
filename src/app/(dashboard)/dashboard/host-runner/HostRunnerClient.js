@@ -35,33 +35,33 @@ const EMPTY_CONFIG = {
 const NUMERIC_FIELDS = [
   {
     key: "maxConcurrent",
-    label: "Max concurrent",
-    hint: "Jobs running at the same time.",
+    label: "Параллельно",
+    hint: "Сколько задач выполняется одновременно.",
   },
   {
     key: "maxPending",
-    label: "Max pending",
-    hint: "Queue depth before new jobs wait in `in/`.",
+    label: "В очереди",
+    hint: "Глубина очереди, после которой новые задачи ждут в `in/`.",
   },
   {
     key: "maxOutputBytes",
-    label: "Max log bytes",
-    hint: "Hard cap on one job's captured output.",
+    label: "Макс. лог (байт)",
+    hint: "Жёсткий лимит захваченного вывода одной задачи.",
   },
   {
     key: "defaultTimeoutMs",
-    label: "Default timeout (ms)",
-    hint: "Used when neither the tool nor the request sets one.",
+    label: "Таймаут по умолчанию (мс)",
+    hint: "Используется, если ни инструмент, ни запрос не задали свой.",
   },
   {
     key: "maxTimeoutMs",
-    label: "Max timeout (ms)",
-    hint: "Upper bound a request can ask for.",
+    label: "Макс. таймаут (мс)",
+    hint: "Верхняя граница, которую может запросить заявка.",
   },
   {
     key: "pollMs",
-    label: "Poll interval (ms)",
-    hint: "How often the daemon looks for new jobs.",
+    label: "Интервал опроса (мс)",
+    hint: "Как часто демон ищет новые задачи.",
   },
 ];
 
@@ -112,7 +112,7 @@ export default function HostRunnerClient() {
 
   // One load implementation, driven by `refreshKey`: the effect does the fetch
   // itself (react-hooks/set-state-in-effect rejects calling a setState-heavy
-  // helper from an effect body), and Reload just bumps the key from an event
+  // helper from an effect body), and «Обновить» just bumps the key from an event
   // handler, where setting `loading` is fine.
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -131,7 +131,7 @@ export default function HostRunnerClient() {
         if (!data.config) {
           setLoadError(
             data.error ||
-              "No whitelist found. The daemon fails closed without one — add a command below to create it.",
+              "Whitelist не найден. Демон не стартует без него — добавьте команду ниже, чтобы его создать.",
           );
           setConfig({ ...EMPTY_CONFIG, tools: {} });
           setCmdLines({});
@@ -166,7 +166,7 @@ export default function HostRunnerClient() {
         );
         setLoadError("");
       } catch {
-        if (!cancelled) setLoadError("Could not load the whitelist");
+        if (!cancelled) setLoadError("Не удалось загрузить whitelist");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -195,11 +195,11 @@ export default function HostRunnerClient() {
   const addTool = () => {
     const name = newToolName.trim();
     if (!TOOL_NAME_RE.test(name)) {
-      setFormError(`Tool name must match ${TOOL_NAME_RE.source}`);
+      setFormError(`Имя инструмента должно соответствовать ${TOOL_NAME_RE.source}`);
       return;
     }
     if (config.tools[name]) {
-      setFormError(`Tool "${name}" already exists`);
+      setFormError(`Инструмент «${name}» уже существует`);
       return;
     }
     patch((prev) => ({
@@ -239,7 +239,7 @@ export default function HostRunnerClient() {
   const save = async () => {
     if (!config) return;
     if (!password) {
-      setFormError("Enter the dashboard password to save.");
+      setFormError("Введите пароль дашборда, чтобы сохранить.");
       return;
     }
     setSaving(true);
@@ -248,7 +248,7 @@ export default function HostRunnerClient() {
       const tools = {};
       for (const [name, tool] of Object.entries(config.tools)) {
         const argv = parseCommandLine(cmdLines[name] ?? "");
-        if (!argv.length) throw new Error(`"${name}" needs a command`);
+        if (!argv.length) throw new Error(`«${name}» нужна команда`);
         tools[name] = {
           ...tool,
           argv,
@@ -257,9 +257,9 @@ export default function HostRunnerClient() {
         };
       }
       if (!Object.keys(tools).length)
-        throw new Error("Add at least one command");
+        throw new Error("Добавьте хотя бы одну команду");
       if (!lines(config.allowedRoots || []).length) {
-        throw new Error("allowedRoots must contain at least one absolute path");
+        throw new Error("allowedRoots должен содержать хотя бы один абсолютный путь");
       }
 
       const res = await fetch("/api/host-runner/config", {
@@ -268,7 +268,7 @@ export default function HostRunnerClient() {
         body: JSON.stringify({ config: { ...config, tools }, password }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Save failed");
+      if (!res.ok) throw new Error(data.error || "Не удалось сохранить");
 
       setConfig(data.config);
       setConfigPath(data.configPath || configPath);
@@ -276,7 +276,7 @@ export default function HostRunnerClient() {
       setAuthConfigured(Boolean(data.authConfigured));
       setPassword("");
       setDirty(false);
-      notify.success("Whitelist saved — the host daemon applied it");
+      notify.success("Whitelist сохранён — хостовый демон применил изменения");
     } catch (error) {
       setFormError(error.message);
     } finally {
@@ -285,7 +285,7 @@ export default function HostRunnerClient() {
   };
 
   if (loading)
-    return <div className="p-6 text-sm text-text-muted">Loading…</div>;
+    return <div className="p-6 text-sm text-text-muted">Загрузка…</div>;
 
   const toolNames = Object.keys(config?.tools || {});
 
@@ -293,19 +293,19 @@ export default function HostRunnerClient() {
     <div className="p-6 max-w-5xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-text-main">
-          Host Runner Commands
+          Команды Host Runner
         </h1>
         <p className="mt-1 text-sm text-text-muted">
-          The <code className="text-text-main">hostrunner_*</code> MCP tools can
-          only run what is listed here. There is no shell: each entry is an
-          exact argv, executed on the host for an agent inside the container.
-          Paths must be absolute, and a job&apos;s working directory must fall
-          inside one of the roots below.
+          MCP-инструменты <code className="text-text-main">hostrunner_*</code>
+          могут запускать только то, что перечислено здесь. Shell нет: каждая
+          запись — точный argv, выполняемый на хосте для агента внутри
+          контейнера. Пути должны быть абсолютными, а рабочая директория задачи
+          должна попадать в один из корней ниже.
         </p>
         {configPath && (
           <p className="mt-2 text-xs text-text-muted">
-            Source: <code className="text-text-main">{configPath}</code>
-            {" — "}on the host, outside this container
+            Источник: <code className="text-text-main">{configPath}</code>
+            {" — "}на хосте, вне этого контейнера
           </p>
         )}
       </div>
@@ -319,8 +319,8 @@ export default function HostRunnerClient() {
       {authConfigured && !writable && (
         <Card className="p-4 border border-yellow-500/40">
           <p className="text-sm text-yellow-500">
-            The daemon answered, but saving is disabled right now. Press Reload
-            to refresh its state.
+            Демон ответил, но сохранение сейчас отключено. Нажмите «Обновить»,
+            чтобы обновить его состояние.
           </p>
         </Card>
       )}
@@ -328,9 +328,9 @@ export default function HostRunnerClient() {
       {!authConfigured && !loadError && (
         <Card className="p-4 border border-yellow-500/40">
           <p className="text-sm text-yellow-500">
-            The host has no key material yet, so nothing can be saved. Run{" "}
+            На хосте нет ключевого материала, сохранять нечего. Запустите{" "}
             <code className="text-text-main">hostrunner-ctl set-password</code>{" "}
-            on the host once, then press Reload.
+            на хосте один раз, затем нажмите «Обновить».
           </p>
         </Card>
       )}
@@ -339,12 +339,12 @@ export default function HostRunnerClient() {
       <Card className="p-5 space-y-3">
         <div>
           <h2 className="text-base font-medium text-text-main">
-            Allowed roots
+            Разрешённые корни
           </h2>
           <p className="text-sm text-text-muted">
-            A job is rejected unless its working directory resolves inside one
-            of these. Symlinks are resolved first, so a link out of the root
-            does not help.
+            Задача отклоняется, если её рабочая директория не попадает в один
+            из этих путей. Символические ссылки разрешаются заранее, поэтому
+            ссылка «наружу» не поможет.
           </p>
         </div>
         <textarea
@@ -361,25 +361,25 @@ export default function HostRunnerClient() {
           spellCheck={false}
           className="w-full rounded-[10px] bg-surface-2 border border-transparent px-3 py-2 font-mono text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-brand-500/30"
         />
-        <p className="text-xs text-text-muted">One absolute path per line.</p>
+        <p className="text-xs text-text-muted">Один абсолютный путь на строку.</p>
       </Card>
 
       {/* ── Commands ──────────────────────────────────────────────────────── */}
       <Card className="p-5 space-y-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-base font-medium text-text-main">Commands</h2>
+            <h2 className="text-base font-medium text-text-main">Команды</h2>
             <p className="text-sm text-text-muted">
               {toolNames.length
-                ? `${toolNames.length} entr${toolNames.length === 1 ? "y" : "ies"} available to agents.`
-                : "Empty list — the daemon refuses to start until at least one command exists."}
+                ? `${toolNames.length} ${toolNames.length === 1 ? "команда" : toolNames.length < 5 ? "команды" : "команд"} доступно агентам.`
+                : "Список пуст — демон не стартует, пока не появится хотя бы одна команда."}
             </p>
           </div>
           <div className="flex items-end gap-2">
             <Input
               value={newToolName}
               onChange={(e) => setNewToolName(e.target.value)}
-              placeholder="new_command_name"
+              placeholder="имя_новой_команды"
               inputClassName="font-mono w-52"
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
@@ -389,16 +389,16 @@ export default function HostRunnerClient() {
               }}
             />
             <Button variant="secondary" icon="add" onClick={addTool}>
-              Add
+              Добавить
             </Button>
           </div>
         </div>
 
         {!toolNames.length && (
           <p className="text-sm text-text-muted">
-            Nothing registered. Agents will get{" "}
-            <code className="text-text-main">hostrunner_run</code> back as an
-            error until you add one.
+            Ничего не зарегистрировано. Агенты будут получать ошибку от{" "}
+            <code className="text-text-main">hostrunner_run</code>, пока вы не
+            добавите хотя бы одну команду.
           </p>
         )}
 
@@ -418,10 +418,10 @@ export default function HostRunnerClient() {
                     <Badge
                       variant={tool.enabled === false ? "default" : "success"}
                     >
-                      {tool.enabled === false ? "disabled" : "enabled"}
+                      {tool.enabled === false ? "отключён" : "включён"}
                     </Badge>
                     {argvError[name] && (
-                      <Badge variant="error">invalid command</Badge>
+                      <Badge variant="error">неверная команда</Badge>
                     )}
                   </div>
                   <div className="flex items-center gap-3">
@@ -436,22 +436,22 @@ export default function HostRunnerClient() {
                       icon="delete"
                       onClick={() => removeTool(name)}
                     >
-                      Remove
+                      Удалить
                     </Button>
                   </div>
                 </div>
 
                 <Input
-                  label="Description"
+                  label="Описание"
                   value={tool.description || ""}
                   onChange={(e) =>
                     patchTool(name, { description: e.target.value })
                   }
-                  placeholder="What this command does"
+                  placeholder="Что делает эта команда"
                 />
 
                 <Input
-                  label="Command"
+                  label="Команда"
                   required
                   value={cmdLines[name] ?? ""}
                   onChange={(e) => {
@@ -463,14 +463,14 @@ export default function HostRunnerClient() {
                     }));
                   }}
                   error={argvError[name]}
-                  hint="Exact argv, no shell. Quotes group one argument: vendor/bin/phpstan analyse --level=max"
+                  hint="Точный argv, без shell. Кавычки группируют один аргумент: vendor/bin/phpstan analyse --level=max"
                   inputClassName="font-mono"
                   placeholder="npx playwright test"
                 />
 
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Input
-                    label="Timeout (ms)"
+                    label="Таймаут (мс)"
                     type="number"
                     min={1000}
                     value={tool.timeoutMs ?? ""}
@@ -481,15 +481,15 @@ export default function HostRunnerClient() {
                           : undefined,
                       })
                     }
-                    hint={`Falls back to ${config.defaultTimeoutMs ?? 900000} ms`}
+                    hint={`По умолчанию ${config.defaultTimeoutMs ?? 900000} мс`}
                   />
                   <Input
-                    label="Argument pattern"
+                    label="Шаблон аргументов"
                     value={tool.argPattern || ""}
                     onChange={(e) =>
                       patchTool(name, { argPattern: e.target.value })
                     }
-                    hint="Regex each extra argument must match. Empty = any argument."
+                    hint="Регулярное выражение, которому должен соответствовать каждый дополнительный аргумент. Пусто = любой аргумент."
                     inputClassName="font-mono"
                     disabled={tool.allowArgs === false}
                   />
@@ -498,12 +498,12 @@ export default function HostRunnerClient() {
                 <div className="flex items-center justify-between gap-3 rounded-[10px] border border-surface-3 px-3 py-2">
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-text-main">
-                      Accept arguments from the agent
+                      Принимать аргументы от агента
                     </p>
                     <p className="text-xs text-text-muted">
-                      Off = fixed argv only. The daemon rejects any extra
-                      argument, so a tool cannot become a second way to run
-                      arbitrary commands.
+                      Выкл = только фиксированный argv. Демон отклоняет любой
+                      дополнительный аргумент, чтобы инструмент не стал вторым
+                      способом запускать произвольные команды.
                     </p>
                   </div>
                   <Toggle
@@ -515,7 +515,7 @@ export default function HostRunnerClient() {
 
                 <div>
                   <label className="text-sm font-medium text-text-main">
-                    Extra environment
+                    Дополнительное окружение
                   </label>
                   <textarea
                     value={envText[name] ?? ""}
@@ -532,14 +532,14 @@ export default function HostRunnerClient() {
                     className="mt-1.5 w-full rounded-[10px] bg-surface-2 border border-transparent px-3 py-2 font-mono text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-brand-500/30"
                   />
                   <p className="mt-1 text-xs text-text-muted">
-                    One <code className="text-text-main">KEY=value</code> per
-                    line, added on top of the inherited allowlist.
+                    Одна строка <code className="text-text-main">KEY=value</code>,
+                    добавляется поверх унаследованного allowlist.
                   </p>
                 </div>
 
                 <div>
                   <label className="text-sm font-medium text-text-main">
-                    Working directories for this command
+                    Рабочие директории для этой команды
                   </label>
                   <textarea
                     value={cwdText[name] ?? ""}
@@ -556,8 +556,8 @@ export default function HostRunnerClient() {
                     className="mt-1.5 w-full rounded-[10px] bg-surface-2 border border-transparent px-3 py-2 font-mono text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-brand-500/30"
                   />
                   <p className="mt-1 text-xs text-text-muted">
-                    One absolute path per line. Leave empty to inherit the
-                    global allowed roots.
+                    Один абсолютный путь на строку. Оставьте пустым, чтобы
+                    унаследовать глобальные разрешённые корни.
                   </p>
                 </div>
               </div>
@@ -570,10 +570,10 @@ export default function HostRunnerClient() {
       <Card className="p-5 space-y-4">
         <div>
           <h2 className="text-base font-medium text-text-main">
-            Queue &amp; limits
+            Очередь и лимиты
           </h2>
           <p className="text-sm text-text-muted">
-            Bounds that keep a misbehaving agent from filling the disk or the
+            Ограничения, не дающие плохо ведущему себя агенту заполнить диск
             daemon&apos;s memory.
           </p>
         </div>
@@ -595,18 +595,18 @@ export default function HostRunnerClient() {
             />
           ))}
           <Input
-            label="Audit log"
+            label="Журнал аудита"
             value={config.auditFile || ""}
             onChange={(e) =>
               patch((prev) => ({ ...prev, auditFile: e.target.value }))
             }
-            hint="JSONL file recording every executed job. Empty = no audit trail."
+            hint="JSONL-файл, записывающий каждую выполненную задачу. Пусто = без журнала."
             inputClassName="font-mono"
           />
         </div>
         <div>
           <label className="text-sm font-medium text-text-main">
-            Environment allowlist
+            Разрешённое окружение
           </label>
           <textarea
             value={(config.envAllowlist || []).join("\n")}
@@ -623,17 +623,17 @@ export default function HostRunnerClient() {
             className="mt-1.5 w-full rounded-[10px] bg-surface-2 border border-transparent px-3 py-2 font-mono text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-brand-500/30"
           />
           <p className="mt-1 text-xs text-text-muted">
-            Host variables copied into the job. Anything not listed — including
-            secrets in <code className="text-text-main">.env</code> — never
-            reaches the command.
+            Хостовые переменные, копируемые в задачу. Всё, что не указано — в
+            том числе секреты из <code className="text-text-main">.env</code> —
+            никогда не попадает в команду.
           </p>
         </div>
       </Card>
 
-      {/* ── Save ──────────────────────────────────────────────────────────── */}
+      {/* ── Сохранение ──────────────────────────────────────────────────────────── */}
       <Card className="p-5 space-y-4">
         <div>
-          <h2 className="text-base font-medium text-text-main">Save</h2>
+          <h2 className="text-base font-medium text-text-main">Сохранение</h2>
           <p className="text-sm text-text-muted">
             Saving signs the whole list with your dashboard password and hands
             it to the host daemon — the only thing that can write the file. The
@@ -644,7 +644,7 @@ export default function HostRunnerClient() {
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <Input
-            label="Dashboard password"
+            label="Пароль дашборда"
             required
             type="password"
             autoComplete="current-password"
@@ -653,13 +653,13 @@ export default function HostRunnerClient() {
               setPassword(e.target.value);
               setFormError("");
             }}
-            placeholder="required to save"
+            placeholder="обязателен для сохранения"
             inputClassName="font-mono w-72"
             disabled={!writable || saving}
             hint={
               writable
-                ? "Same password you sign in to this dashboard with."
-                : "Unavailable until the daemon is running and provisioned."
+                ? "Тот же пароль, которым вы входите в этот дашборд."
+                : "Недоступно, пока демон не запущен и не настроен."
             }
           />
           <Button
@@ -667,10 +667,10 @@ export default function HostRunnerClient() {
             disabled={saving || !writable || !password || !dirty}
             loading={saving}
           >
-            {saving ? "Saving…" : "Save whitelist"}
+            {saving ? "Сохранение…" : "Сохранить whitelist"}
           </Button>
           {dirty && (
-            <span className="text-sm text-text-muted">Unsaved changes</span>
+            <span className="text-sm text-text-muted">Несохранённые изменения</span>
           )}
           <Button
             variant="ghost"
@@ -681,7 +681,7 @@ export default function HostRunnerClient() {
             }}
             disabled={saving}
           >
-            Reload
+            Обновить
           </Button>
         </div>
       </Card>

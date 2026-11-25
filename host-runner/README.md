@@ -201,6 +201,51 @@ volumes:
   - /home/maxim/.9r-host-runner/out:/home/maxim/.9r-host-runner/out:ro
 ```
 
+### 5. Доступ к браузерам Playwright на хосте
+
+Если инструмент вроде `e2e_real` указывает `PLAYWRIGHT_BROWSERS_PATH` на
+каталог внутри тома Docker (например, `/var/lib/docker/volumes/.../_data/ms-playwright`),
+демон работает от обычного пользователя (uid 1000), а Docker по умолчанию
+создаёт `/var/lib/docker` и `/var/lib/docker/volumes` с правами `0710`/`0700`
+root:root — пользователь демона **не может пройти** по этим каталогам, и
+Playwright падает с «Executable doesn't exist», хотя файл на самом деле есть.
+
+Симптом: задача завершается со статусом `failed`, в логе Playwright —
+`browserType.launch: Executable doesn't exist at ...`, при этом файл
+существует (виден из контейнера в смонтированном томе).
+
+Диагностика (от root):
+
+```bash
+namei -l /var/lib/docker/volumes/<volume-name>/_data/ms-playwright/chromium_headless_shell-<rev>/chrome-headless-shell-linux64/chrome-headless-shell
+```
+
+Фикс (от root, один раз):
+
+```bash
+chmod 755 /var/lib/docker
+chmod 755 /var/lib/docker/volumes
+chmod 755 /var/lib/docker/volumes/<volume-name>
+chmod 755 /var/lib/docker/volumes/<volume-name>/_data
+```
+
+Проверка (от пользователя демона, без sudo):
+
+```bash
+su - <user> -c "test -x /var/lib/docker/volumes/<volume-name>/_data/ms-playwright/chromium_headless_shell-<rev>/chrome-headless-shell-linux64/chrome-headless-shell && echo 'browsers readable OK'"
+```
+
+Альтернатива, если трогать Docker-каталоги нельзя — скопировать браузеры в
+читаемое место (`~/.cache/ms-playwright`) контейнером от root и указать этот
+путь в `PLAYWRIGHT_BROWSERS_PATH`:
+
+```bash
+docker run --rm \
+  -v <volume-name>:/src:ro \
+  -v /home/<user>/.cache:/dst \
+  alpine sh -c 'mkdir -p /dst/ms-playwright && cp -a /src/ms-playwright/. /dst/ms-playwright/'
+```
+
 Пересоберите образ, чтобы `host-runner/plugin.mjs` попал внутрь
 (`Dockerfile` уже содержит `COPY --from=builder /app/host-runner ./host-runner`,
 но сейчас запущенный образ собран до этого изменения):
@@ -408,3 +453,7 @@ shell и без аргументов от агента:
 Playwright 1.63: `chromium-1243`); `E2E_HOST_GATEWAY` фиксирует шлюз
 `vpn_default`, потому что со хоста автоопределение из `/proc/net/route`
 могло бы выбрать не тот интерфейс.
+
+Важно: каталог `/var/lib/docker/volumes` по умолчанию недоступен
+не-root пользователю. Если Playwright падает с «Executable doesn't exist»,
+см. раздел «5. Доступ к браузерам Playwright на хосте».
