@@ -339,6 +339,53 @@ codex mcp get hostrunner
 
 Убрать: `codex mcp remove hostrunner`.
 
+---
+
+## OpenCode
+
+MCP-сервер прописывается в `~/.config/opencode/opencode.json` (файл общий для хоста
+и контейнера — пути хостовые):
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "hostrunner": {
+        "type": "local",
+        "command": [
+          "/home/maxim/.nvm/versions/node/v24.19.0/bin/node",
+          "/home/maxim/Projects/personal-projects/9router-max-exp/host-runner/plugin.mjs"
+        ],
+        "environment": {
+          "HOST_RUNNER_IN_DIR": "/home/maxim/.9r-host-runner/in",
+          "HOST_RUNNER_OUT_DIR": "/home/maxim/.9r-host-runner/out"
+        }
+      }
+    }
+  }
+}
+```
+
+После правки перезапустите OpenCode. Плагин сам проверяет наличие каталогов
+очереди и отвечает ошибкой, если демон ещё не запущен.
+
+---
+
+## Devin
+
+Devin читает MCP-серверы из переменной окружения `DEVIN_MCP_SERVERS` (JSON).
+При запуске через 9router она выставляется автоматически (compose-оверлей
+`docker-compose.hostrunner.yml` уже содержит `DEVIN_MCP_SERVERS`). При ручном
+запуске devin на хосте:
+
+```bash
+export DEVIN_MCP_SERVERS='{"hostrunner":{"command":"/home/maxim/.nvm/versions/node/v24.19.0/bin/node","args":["/home/maxim/Projects/personal-projects/9router-max-exp/host-runner/plugin.mjs"],"env":{"HOST_RUNNER_IN_DIR":"/home/maxim/.9r-host-runner/in","HOST_RUNNER_OUT_DIR":"/home/maxim/.9r-host-runner/out"}}}'
+devin
+```
+
+Агенты, запущенные через 9router (ACP), получают hostrunner автоматически через
+`buildMcpProxyTargets()` — никакой ручной настройки не требуется.
+
 Важные детали:
 
 - `config.toml` общий для хоста и контейнера (`~/.codex` смонтирован в
