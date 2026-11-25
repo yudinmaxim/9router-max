@@ -195,7 +195,9 @@ export default function HostRunnerClient() {
   const addTool = () => {
     const name = newToolName.trim();
     if (!TOOL_NAME_RE.test(name)) {
-      setFormError(`Имя инструмента должно соответствовать ${TOOL_NAME_RE.source}`);
+      setFormError(
+        `Имя инструмента должно соответствовать ${TOOL_NAME_RE.source}`,
+      );
       return;
     }
     if (config.tools[name]) {
@@ -259,7 +261,9 @@ export default function HostRunnerClient() {
       if (!Object.keys(tools).length)
         throw new Error("Добавьте хотя бы одну команду");
       if (!lines(config.allowedRoots || []).length) {
-        throw new Error("allowedRoots должен содержать хотя бы один абсолютный путь");
+        throw new Error(
+          "allowedRoots должен содержать хотя бы один абсолютный путь",
+        );
       }
 
       const res = await fetch("/api/host-runner/config", {
@@ -342,9 +346,9 @@ export default function HostRunnerClient() {
             Разрешённые корни
           </h2>
           <p className="text-sm text-text-muted">
-            Задача отклоняется, если её рабочая директория не попадает в один
-            из этих путей. Символические ссылки разрешаются заранее, поэтому
-            ссылка «наружу» не поможет.
+            Задача отклоняется, если её рабочая директория не попадает в один из
+            этих путей. Символические ссылки разрешаются заранее, поэтому ссылка
+            «наружу» не поможет.
           </p>
         </div>
         <textarea
@@ -361,7 +365,9 @@ export default function HostRunnerClient() {
           spellCheck={false}
           className="w-full rounded-[10px] bg-surface-2 border border-transparent px-3 py-2 font-mono text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-brand-500/30"
         />
-        <p className="text-xs text-text-muted">Один абсолютный путь на строку.</p>
+        <p className="text-xs text-text-muted">
+          Один абсолютный путь на строку.
+        </p>
       </Card>
 
       {/* ── Commands ──────────────────────────────────────────────────────── */}
@@ -532,7 +538,8 @@ export default function HostRunnerClient() {
                     className="mt-1.5 w-full rounded-[10px] bg-surface-2 border border-transparent px-3 py-2 font-mono text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-brand-500/30"
                   />
                   <p className="mt-1 text-xs text-text-muted">
-                    Одна строка <code className="text-text-main">KEY=value</code>,
+                    Одна строка{" "}
+                    <code className="text-text-main">KEY=value</code>,
                     добавляется поверх унаследованного allowlist.
                   </p>
                 </div>
@@ -670,7 +677,9 @@ export default function HostRunnerClient() {
             {saving ? "Сохранение…" : "Сохранить whitelist"}
           </Button>
           {dirty && (
-            <span className="text-sm text-text-muted">Несохранённые изменения</span>
+            <span className="text-sm text-text-muted">
+              Несохранённые изменения
+            </span>
           )}
           <Button
             variant="ghost"
