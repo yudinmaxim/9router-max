@@ -42,8 +42,8 @@ services:
     volumes:
       # Kompas bridge: shared working directory between host and container.
       - /tmp/kompas-bridge:/tmp/kompas-bridge
-      # Kompas3D MCP: shared data directory between host and container.
-      - /home/maxim/.local/share/kompas3d-mcp:/home/node/.local/share/kompas3d-mcp
+      # Kompas3D AI: shared data directory (host path == container path, like Projects).
+      - /home/maxim/.kompas-3d-ai:/home/maxim/.kompas-3d-ai
       # Kompas3D: shared application data.
       - /usr/local/share/kompas-3d:/usr/local/share/kompas-3d
       # Same queue, two target paths. `/var/lib/9r-runner/*` is what the
