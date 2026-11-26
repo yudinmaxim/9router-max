@@ -38,7 +38,7 @@ services:
       NINEROUTER_HOST_RUNNER_PLUGIN: /app/host-runner/plugin.mjs
       HOST_RUNNER_IN_DIR: /var/lib/9r-runner/in
       HOST_RUNNER_OUT_DIR: /var/lib/9r-runner/out
-      DEVIN_MCP_SERVERS: '{"hostrunner":{"command":"/usr/local/bin/node","args":["/app/host-runner/plugin.mjs"],"env":{"HOST_RUNNER_IN_DIR":"/var/lib/9r-runner/in","HOST_RUNNER_OUT_DIR":"/var/lib/9r-runner/out"}}}'
+      DEVIN_MCP_SERVERS: '{"hostrunner":{"command":"/usr/local/bin/node","args":["/app/host-runner/plugin.mjs"],"env":{"HOST_RUNNER_IN_DIR":"/var/lib/9r-runner/in","HOST_RUNNER_OUT_DIR":"/var/lib/9r-runner/out"}},"kompas3d":{"command":"/home/maxim/Projects/personal-projects/kompas3d-ai/.venv-mcp/bin/python","args":["/home/maxim/.kompas-3d-ai/server.py"],"env":{"KOMPAS_BRIDGE_SOCKET":"/tmp/kompas-bridge/bridge.sock"}}}'
     volumes:
       # Kompas bridge: shared working directory between host and container.
       - /tmp/kompas-bridge:/tmp/kompas-bridge
