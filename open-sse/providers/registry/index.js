@@ -137,6 +137,7 @@ import p138 from "./cursor-acp.js";
 import p139 from "./opencode-acp.js";
 import p140 from "./omp-acp.js";
 import p141 from "./codex-acp.js";
+import p142 from "./koda-acp.js";
 export default [
   p0,
   p1,
@@ -274,4 +275,5 @@ export default [
   p139,
   p140,
   p141,
+  p142,
 ];

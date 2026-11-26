@@ -11,6 +11,7 @@ import { CodexExecutor } from "./codex.js";
 import { CursorAcpExecutor } from "./cursor-acp.js";
 import { OpenCodeAcpExecutor } from "./opencode-acp.js";
 import { OmpAcpExecutor } from "./omp-acp.js";
+import { KodaAcpExecutor } from "./koda-acp.js";
 import { CodexAcpExecutor } from "./codex-acp.js";
 import { VertexExecutor } from "./vertex.js";
 import { GrokWebExecutor } from "./grok-web.js";
@@ -45,6 +46,7 @@ const executors = {
   ca: new CursorAcpExecutor(), // Alias for cursor-acp
   "opencode-acp": new OpenCodeAcpExecutor(),
   "omp-acp": new OmpAcpExecutor(),
+  "koda-acp": new KodaAcpExecutor(),
   "codex-acp": new CodexAcpExecutor(),
   vertex: new VertexExecutor("vertex"),
   "vertex-partner": new VertexExecutor("vertex-partner"),
@@ -102,6 +104,7 @@ export { CodexExecutor } from "./codex.js";
 export { CursorAcpExecutor } from "./cursor-acp.js";
 export { OpenCodeAcpExecutor } from "./opencode-acp.js";
 export { OmpAcpExecutor } from "./omp-acp.js";
+export { KodaAcpExecutor } from "./koda-acp.js";
 export { CodexAcpExecutor } from "./codex-acp.js";
 export { AcpAgentExecutor } from "./lib/acpBase.js";
 export { VertexExecutor } from "./vertex.js";
