@@ -40,6 +40,8 @@ services:
       HOST_RUNNER_OUT_DIR: /var/lib/9r-runner/out
       DEVIN_MCP_SERVERS: '{"hostrunner":{"command":"/usr/local/bin/node","args":["/app/host-runner/plugin.mjs"],"env":{"HOST_RUNNER_IN_DIR":"/var/lib/9r-runner/in","HOST_RUNNER_OUT_DIR":"/var/lib/9r-runner/out"}}}'
     volumes:
+      # Kompas bridge: shared working directory between host and container.
+      - /tmp/kompas-bridge:/tmp/kompas-bridge
       # Same queue, two target paths. `/var/lib/9r-runner/*` is what the
       # router's own ACP plugin (NINEROUTER_HOST_RUNNER) is told to use; the
       # host-identical copy exists because ~/.codex/config.toml is shared with
