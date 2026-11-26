@@ -341,6 +341,64 @@ codex mcp get hostrunner
 
 ---
 
+## Kompas3D MCP (мост к живой модели)
+
+Отдельный MCP-сервер `kompas3d` работает через Unix-сокет
+`/tmp/kompas-bridge/bridge.sock` (том `kompas-bridge` монтируется в контейнер).
+Инструменты: `bridge_status`, `get_active_document`, `get_model_tree`,
+`get_model_contents`, `get_build_history`.
+
+Перед использованием нужно один раз активировать «Kompas Bridge» в KOMPAS-3D —
+после этого `bridge_status` вернёт `{"success": true, "message": "pong"}`.
+
+### OpenCode
+
+Добавить в `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "kompas3d": {
+        "type": "local",
+        "command": [
+          "/home/maxim/Projects/personal-projects/kompas3d-ai/.venv-mcp/bin/python",
+          "/home/maxim/.kompas-3d-ai/server.py"
+        ],
+        "environment": {
+          "KOMPAS_BRIDGE_SOCKET": "/tmp/kompas-bridge/bridge.sock"
+        }
+      }
+    }
+  }
+}
+```
+
+### Codex CLI
+
+```bash
+codex mcp add kompas3d \
+  --env KOMPAS_BRIDGE_SOCKET=/tmp/kompas-bridge/bridge.sock \
+  -- /home/maxim/Projects/personal-projects/kompas3d-ai/.venv-mcp/bin/python \
+     /home/maxim/.kompas-3d-ai/server.py
+```
+
+### Devin
+
+Добавить в `DEVIN_MCP_SERVERS`:
+
+```json
+{
+  "kompas3d": {
+    "command": "/home/maxim/Projects/personal-projects/kompas3d-ai/.venv-mcp/bin/python",
+    "args": ["/home/maxim/.kompas-3d-ai/server.py"],
+    "env": {"KOMPAS_BRIDGE_SOCKET": "/tmp/kompas-bridge/bridge.sock"}
+  }
+}
+```
+
+---
+
 ## OpenCode
 
 MCP-сервер прописывается в `~/.config/opencode/opencode.json` (файл общий для хоста
