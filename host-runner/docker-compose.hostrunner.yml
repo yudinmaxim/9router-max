@@ -42,6 +42,8 @@ services:
     volumes:
       # Kompas bridge: shared working directory between host and container.
       - /tmp/kompas-bridge:/tmp/kompas-bridge
+      # Kompas3D MCP: shared data directory between host and container.
+      - /home/maxim/.local/share/kompas3d-mcp:/home/node/.local/share/kompas3d-mcp
       # Same queue, two target paths. `/var/lib/9r-runner/*` is what the
       # router's own ACP plugin (NINEROUTER_HOST_RUNNER) is told to use; the
       # host-identical copy exists because ~/.codex/config.toml is shared with
