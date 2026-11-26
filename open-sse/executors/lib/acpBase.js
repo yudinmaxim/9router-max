@@ -1442,6 +1442,7 @@ export class AcpAgentExecutor extends BaseExecutor {
             protocolVersion: 1,
             clientInfo: { name: "9router", version: clientVersion },
             capabilities: {},
+            clientCapabilities: this.acp.clientCapabilities || {},
           });
         }
       },

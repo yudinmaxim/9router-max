@@ -34,6 +34,10 @@ export class KodaAcpExecutor extends AcpAgentExecutor {
       label: "Koda",
       errorType: "koda_acp_error",
       installHint: "Install with `npm i -g @kodadev/koda-cli` and run `koda` once.",
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+      },
     });
   }
 }
