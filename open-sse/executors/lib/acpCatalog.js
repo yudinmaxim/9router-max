@@ -180,7 +180,7 @@ export function probeAcpCatalog(bin, spec, extraEnv = {}, timeoutMs = PROBE_TIME
           const modelOption = options.find((o) => o.category === "model" || o.id === "model");
           // The model list is the model option's values. An agent that instead
           // returns a flat `availableModels` (cursor) lands here too.
-          const models = (modelOption?.options || (result.models || result.availableModels || []).map((m) =>
+          const models = (modelOption?.options || (result.models?.availableModels || result.availableModels || (Array.isArray(result.models) ? result.models : [])).map((m) =>
             typeof m === "string" ? { value: m, name: m } : {
         value: m.modelId || m.id,
         name: m.name || m.modelId || m.id,
@@ -204,7 +204,7 @@ export function probeAcpCatalog(bin, spec, extraEnv = {}, timeoutMs = PROBE_TIME
       /* the close/error handler reports it */
     });
 
-    send(PROBE_ID_INIT, "initialize", { protocolVersion: 1, clientInfo: PROBE_CLIENT, capabilities: {} });
+    send(PROBE_ID_INIT, "initialize", { protocolVersion: 1, clientInfo: PROBE_CLIENT, capabilities: {}, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true } });
   });
 }
 
