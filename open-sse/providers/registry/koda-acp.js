@@ -39,6 +39,6 @@ export default {
     forceStream: true,
     noAuth: true,
   },
-  models: [],
+  models: [{ id: "koda-base", name: "Koda Base (auto)" }],
   passthroughModels: true,
 };
